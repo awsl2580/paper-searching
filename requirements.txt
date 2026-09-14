@@ -1,0 +1,7 @@
+flask>=3.0.0
+langchain
+langchain-deepseek
+langchain-core
+requests>=2.28.0
+python-dotenv>=1.0.0
+bcrypt>=4.0.0
