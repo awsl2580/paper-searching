@@ -49,43 +49,55 @@ from langchain_core.tools import tool
 # ── API 配置 ──────────────────────────────────────────────
 
 # ── 系统提示词 ────────────────────────────────────────────
+# 注意：CLI 版没有 Web 的"论文卡片"，所以这里要求正文把作者/年份/摘要/链接都写全；
+# Web 版（app.py）反过来要求正文只列标题，避免和卡片重复。两边刻意不同，别改齐。
 DEFAULT_SYSTEM_PROMPT = """你是一个专业的学术文献检索助手。你的任务是帮助用户查找和了解学术论文。
 
+检索结果来自多个数据源（Semantic Scholar、OpenAlex），
+每条结果里都有 sourceLabel 标明来源、language 标明语种（en/zh）。
+
 你可以使用以下工具：
-- search_papers：根据关键词搜索学术论文，返回论文列表（含标题、作者、年份、摘要概要）
-- get_paper_detail：获取某篇论文的详细信息（含完整摘要、引用数、发表期刊/会议等）
+- search_papers：搜索学术论文，返回论文列表（含标题、作者、年份、摘要概要、来源）
+- get_paper_detail：获取论文详细信息（含完整摘要、引用数、发表期刊/会议等）
 
 使用规则：
 1. 当用户询问某个领域或主题的论文时，先用 search_papers 搜索
-2. 将搜索到的论文以简洁的编号列表呈现给用户，每条包含：标题、作者、年份、简短摘要
-3. 当用户说"看第X篇"或"详细介绍某篇"时，用 get_paper_detail 获取详细信息
-4. 如果用户直接提供了论文标题，也可以用 get_paper_detail 直接查询
-5. 回复时请用中文，保持专业且友好的学术交流风格"""
+2. search_papers 的 source 参数控制范围：all=中英文（默认）、cn=仅中文、en=仅英文。
+   用户说"中文文献/国内研究"就用 cn，说"英文文献/外文"就用 en
+3. 把结果以简洁的编号列表呈现，每条包含：标题、作者、年份、来源标注、简短摘要、原文链接，
+   来源标注写成【来源：OpenAlex】这样的形式
+   - 原文链接直接写完整 URL（取自结果的 url 字段），有 openAccessPdf 就再附上 PDF 链接
+   - 链接只能照抄 url / openAccessPdf 字段，不要自己拼造或改写 URL；为空就写"该源未提供链接"
+4. warnings 字段非空时（某个源本次检索失败），只用半句话在末尾带一句，不要单独写一段数据源状态说明
+5. 当用户说"看第X篇"或"详细介绍某篇"时，把该篇的 id 字段原样传给 get_paper_detail；
+   如果用户直接给了论文标题，也可以直接查
+6. 不要编造检索结果里没有的论文、作者、引用数或链接
+7. 回复时请用中文，保持专业且友好的学术交流风格"""
 
 
 # ── 工具定义 ──────────────────────────────────────────────
-# 检索逻辑与 Web 版共用 s2_client（节流 + 指数退避 + 缓存 + 可选 API Key）。
-# 不配 SEMANTIC_SCHOLAR_API_KEY 时走公共通道，429 时请按提示配置 Key。
-import s2_client
+# 检索逻辑与 Web 版共用 providers 多源聚合层
+# （节流 + 指数退避 + 缓存 + 跨源去重），避免两边行为漂移。
+import providers
 
 
 @tool
-def search_papers(query: str, limit: int = 5) -> str:
-    """搜索学术论文。参数: query=搜索关键词（英文效果最佳），limit=返回数量（默认5，最多10）。"""
-    return s2_client.search_papers(query, limit)
+def search_papers(query: str, limit: int = 5, source: str = "all", min_relevance: int = 0) -> str:
+    """搜索学术论文。
+
+    参数:
+        query: 搜索关键词（中文主题用中文，英文主题用英文）
+        limit: 返回数量（默认5，最多10）
+        source: 'all'=中英文全部(默认)、'cn'=仅中文文献、'en'=仅英文文献
+        min_relevance: 相关度下限 0-100，默认 0（只剔除查询词完全没命中的）
+    """
+    return providers.search_papers(query, limit, source, min_relevance)
 
 
 @tool
 def get_paper_detail(paper_id: str) -> str:
-    """获取论文详细信息。参数: paper_id=论文ID（40位）或论文标题。"""
-    if not paper_id or not paper_id.strip():
-        return json.dumps({"error": "请提供论文ID或标题"}, ensure_ascii=False)
-
-    pid = paper_id.strip()
-
-    if len(pid) == 40 and all(c in "0123456789abcdef" for c in pid.lower()):
-        return s2_client.get_paper_by_id(pid)
-    return s2_client.get_paper_by_title(pid)
+    """获取论文详细信息。参数 paper_id=检索结果里的 id 字段，也可以是论文标题。"""
+    return providers.get_detail(paper_id)
 
 
 # ── 构建 Agent ────────────────────────────────────────────

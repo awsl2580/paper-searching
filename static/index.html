@@ -174,6 +174,40 @@
         }
         .send:disabled{ opacity:.5; cursor:not-allowed; }
 
+        /* ── 运行中的进度提示（转圈 + 阶段文字 + 已等待秒数） ── */
+        .loading-card {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 2px 0;
+        }
+        .spinner {
+            width: 16px;
+            height: 16px;
+            flex: 0 0 16px;
+            border: 2px solid #dbe6fb;
+            border-top-color: #4f7df3;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .loading-card .loading-text {
+            font-size: 13px;
+            color: #4a5568;
+        }
+        .loading-card .loading-elapsed {
+            font-size: 12px;
+            color: #9aa5b8;
+            font-variant-numeric: tabular-nums;
+        }
+        .loading-hint {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #9aa5b8;
+            line-height: 1.7;
+        }
         .thinking-dots {
             display: inline-flex;
             align-items: center;
@@ -704,6 +738,124 @@
             background: #1e8449;
         }
 
+        /* ── 精读文献表（命题核心功能：检索筛选 → 精读清单） ── */
+        #tablePanel {
+            display: none;
+            padding: 12px 24px 16px;
+            background: #f8faff;
+            border-bottom: 1px solid #eef2f7;
+            flex-shrink: 0;
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+        #tablePanel .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        #tablePanel .panel-header span {
+            font-size: 15px;
+            color: #1a2a6c;
+        }
+        #tablePanel .panel-header button {
+            background: none;
+            border: none;
+            font-size: 18px;
+            cursor: pointer;
+            color: #999;
+        }
+        .table-toolbar {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .table-toolbar select,
+        .table-toolbar button {
+            padding: 6px 12px;
+            border: 1px solid #dbe3f0;
+            border-radius: 7px;
+            font-size: 12.5px;
+            background: #fff;
+            color: #4a5568;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .table-toolbar button:hover {
+            background: #f2f6ff;
+            border-color: #b9cdf3;
+        }
+        .table-toolbar .toolbar-hint {
+            font-size: 11.5px;
+            color: #9aa5b8;
+            margin-left: auto;
+        }
+        .paper-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12.5px;
+            background: #fff;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .paper-table th {
+            background: #f1f5fd;
+            color: #54607a;
+            font-weight: 600;
+            padding: 8px 10px;
+            text-align: left;
+            white-space: nowrap;
+            cursor: pointer;
+            user-select: none;
+        }
+        .paper-table th:hover {
+            background: #e8eefb;
+        }
+        .paper-table td {
+            padding: 8px 10px;
+            border-top: 1px solid #eef2f7;
+            color: #3d4757;
+            vertical-align: top;
+        }
+        .paper-table tr:hover td {
+            background: #fafcff;
+        }
+        .paper-table .col-idx   { width: 34px; color: #9aa5b8; }
+        .paper-table .col-score { width: 78px; white-space: nowrap; }
+        .paper-table .col-year  { width: 54px; }
+        .paper-table .col-full  { width: 76px; white-space: nowrap; }
+        .paper-table .t-title   { font-weight: 600; color: #1a2a3a; }
+        .paper-table .t-sub     { color: #8a94a6; font-size: 11.5px; margin-top: 2px; }
+        .score-pill {
+            display: inline-block;
+            min-width: 34px;
+            text-align: center;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 11.5px;
+            font-weight: 600;
+        }
+        .score-high { background: #e9f7ef; color: #1e8449; }
+        .score-mid  { background: #fff7e6; color: #8a6d1f; }
+        .score-low  { background: #f4f5f7; color: #8a94a6; }
+        .full-yes { color: #1e8449; font-weight: 600; }
+        .full-no  { color: #b6bdc9; }
+        .citation-box {
+            margin-top: 10px;
+            background: #fff;
+            border: 1px solid #e3eaf6;
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 12px;
+            line-height: 1.9;
+            color: #4a5568;
+            white-space: pre-wrap;
+            max-height: 220px;
+            overflow-y: auto;
+        }
+
         .input-area {
             display: flex;
             gap: 12px;
@@ -791,6 +943,219 @@
                 font-size: 10px;
             }
         }
+        /* ── 文献来源开关 ── */
+        .source-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 24px;
+            border-top: 1px solid #eef2f7;
+            background: #fafcff;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+        }
+        .source-bar .source-bar-label {
+            font-size: 12px;
+            color: #8a94a6;
+        }
+        .source-switch {
+            display: inline-flex;
+            border: 1px solid #dbe3f0;
+            border-radius: 8px;
+            overflow: hidden;
+            background: white;
+        }
+        .source-switch button {
+            border: none;
+            background: transparent;
+            padding: 5px 14px;
+            font-size: 12px;
+            color: #5a6478;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.15s, color 0.15s;
+        }
+        .source-switch button + button {
+            border-left: 1px solid #dbe3f0;
+        }
+        .source-switch button:hover {
+            background: #f2f6ff;
+        }
+        .source-switch button.active {
+            background: linear-gradient(135deg, #1a2a6c, #2d4373);
+            color: white;
+        }
+        .source-bar .source-hint {
+            font-size: 11px;
+            color: #a8b0c0;
+        }
+
+        /* ── 论文卡片：结构化结果 + 来源标签 + 每篇独立操作 ── */
+        .paper-cards {
+            margin: 10px 0 2px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .paper-card {
+            border: 1px solid #e3eaf6;
+            border-radius: 10px;
+            padding: 12px 14px;
+            background: #fbfdff;
+        }
+        .paper-card .pc-head {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .paper-card .pc-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1a2a3a;
+            line-height: 1.5;
+        }
+        .src-tag {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 20px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .src-tag[data-source="semantic_scholar"] { background: #e8f1ff; color: #2b6cb0; }
+        .src-tag[data-source="openalex"]         { background: #e9f7ef; color: #1e8449; }
+        .paper-card .pc-meta {
+            margin-top: 6px;
+            font-size: 12px;
+            color: #78839a;
+            line-height: 1.7;
+        }
+        .paper-card .pc-abstract {
+            margin-top: 8px;
+            font-size: 12.5px;
+            color: #4a5568;
+            line-height: 1.75;
+        }
+        .paper-card .pc-actions {
+            margin-top: 10px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .paper-card .pc-actions button {
+            padding: 4px 12px;
+            font-size: 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            border: 1px solid #dbe3f0;
+            background: white;
+            color: #4a5568;
+            font-family: inherit;
+        }
+        .paper-card .pc-actions button:hover {
+            background: #f2f6ff;
+            border-color: #b9cdf3;
+        }
+        .paper-card .pc-actions button.btn-fav-on {
+            background: #fff7e6;
+            border-color: #f0c674;
+            color: #8a6d1f;
+        }
+        .paper-card .pc-detail {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px dashed #e3eaf6;
+            font-size: 12.5px;
+            color: #4a5568;
+            line-height: 1.75;
+            white-space: pre-wrap;
+        }
+        .paper-card .pc-detail.error {
+            color: #b03a2e;
+        }
+        /* ── 论文链接（直接摆出完整 URL，方便点击和复制） ── */
+        .paper-card .pc-links {
+            margin-top: 9px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .paper-card .pc-link-row {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .paper-card .pc-link-label {
+            font-size: 11px;
+            color: #9aa5b8;
+            flex: 0 0 34px;
+        }
+        .paper-card .pc-link-label.is-fulltext {
+            color: #1e8449;
+            font-weight: 600;
+        }
+        .paper-card .pc-link-a {
+            font-size: 12px;
+            color: #2b6cb0;
+            word-break: break-all;
+            text-decoration: none;
+        }
+        .paper-card .pc-link-a.is-fulltext {
+            color: #1e8449;
+            font-weight: 600;
+        }
+        .paper-card .pc-link-a:hover {
+            text-decoration: underline;
+        }
+        .paper-card .pc-link-tag {
+            font-size: 10.5px;
+            color: #9aa5b8;
+            background: #f1f4f9;
+            border-radius: 4px;
+            padding: 1px 6px;
+            white-space: nowrap;
+        }
+        .paper-card .pc-link-note {
+            font-size: 11.5px;
+            color: #b6bdc9;
+            margin-top: 2px;
+        }
+        .paper-card .pc-copy {
+            font-size: 11px;
+            padding: 1px 8px;
+            border-radius: 5px;
+            border: 1px solid #dbe3f0;
+            background: #fff;
+            color: #6b7280;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .paper-card .pc-copy:hover {
+            background: #f2f6ff;
+            border-color: #b9cdf3;
+        }
+        .paper-card .pc-nolink {
+            font-size: 12px;
+            color: #b6bdc9;
+        }
+        /* 回答正文里的链接与来源标签 */
+        .msg-link {
+            color: #2b6cb0;
+            word-break: break-all;
+        }
+        .src-inline {
+            display: inline-block;
+            font-size: 11px;
+            padding: 1px 7px;
+            border-radius: 20px;
+            background: #eef3fb;
+            color: #5a6b85;
+            margin: 0 2px;
+        }
+        .bubble strong {
+            color: #16233a;
+        }
     </style>
 </head>
 <body>
@@ -829,6 +1194,7 @@
             </div>
             <div class="header-actions" id="headerActions">
                 <button class="btn btn-clear btn-sm" id="btnFavorites" onclick="showFavorites()">⭐ 收藏</button>
+                <button class="btn btn-clear btn-sm" id="btnTable" onclick="toggleTablePanel()">📊 文献表</button>
                 <button class="btn btn-clear btn-sm" id="btnPolish" onclick="togglePolishPanel()">✍️ 润色</button>
                 <button class="btn btn-outline btn-sm" id="btnLogout" style="display:none;" onclick="logout()">登出</button>
             </div>
@@ -880,12 +1246,42 @@
                 </div>
             </div>
 
+            <div id="tablePanel">
+                <div class="panel-header">
+                    <span>📊 精读文献表</span>
+                    <button onclick="closeTablePanel()">✕</button>
+                </div>
+                <div class="table-toolbar">
+                    <select id="citeStyle" onchange="onCiteStyleChange()">
+                        <option value="gbt7714">GB/T 7714（国标）</option>
+                        <option value="apa">APA 第 7 版</option>
+                        <option value="bibtex">BibTeX</option>
+                    </select>
+                    <button onclick="copyAllCitations()">📋 复制全部引用</button>
+                    <button onclick="exportPapersCsv()">⬇ 导出 CSV</button>
+                    <button onclick="exportCitationsTxt()">⬇ 导出引用 .txt</button>
+                    <span class="toolbar-hint" id="tableHint"></span>
+                </div>
+                <div id="tableBody"></div>
+                <div class="citation-box" id="citationPreview">（选择格式后这里会显示全部引用文本）</div>
+            </div>
+
             <div class="messages" id="messages">
                 <div class="empty">
                     <span class="icon">🔍</span>
                     输入关键词搜索学术论文<br />
                     例如：<strong>machine learning</strong> 或 <strong>transformer</strong>
                 </div>
+            </div>
+
+            <div class="source-bar">
+                <span class="source-bar-label">文献来源</span>
+                <div class="source-switch" id="sourceSwitch">
+                    <button type="button" data-source="all" class="active">全部</button>
+                    <button type="button" data-source="en">英文</button>
+                    <button type="button" data-source="cn">中文</button>
+                </div>
+                <span class="source-hint" id="sourceHint"></span>
             </div>
 
             <div class="input-area">
@@ -923,6 +1319,9 @@
         let _polishedContent = '';
         let conversations = [];            // 服务端会话列表
         let activeConversationId = null;   // 当前打开的会话 id（null = 全新对话）
+        // 文献来源偏好：all=中英文 / en=仅英文 / cn=仅中文，随每次请求带给后端
+        let sourcePref = 'all';
+        try { sourcePref = localStorage.getItem('sourcePref') || 'all'; } catch (e) { sourcePref = 'all'; }
 
         const chatSection = document.getElementById('chat-section');
         const authTitle = document.getElementById('authTitle');
@@ -954,6 +1353,8 @@
         const originalAbstract = document.getElementById('originalAbstract');
         const polishedResult = document.getElementById('polishedResult');
         const polishStyle = document.getElementById('polishStyle');
+        const sourceSwitch = document.getElementById('sourceSwitch');
+        const sourceHint = document.getElementById('sourceHint');
 
         const EMPTY_STATE_HTML = `
             <div class="empty">
@@ -975,7 +1376,7 @@
                 div.className = `message ${msg.role}`;
                 div.innerHTML = `
                     <div class="label">${msg.role === 'user' ? '你' : '助手'}</div>
-                    <div class="bubble">${escapeHtml(msg.content)}</div>
+                    <div class="bubble">${renderRichText(msg.content)}</div>
                 `;
                 messagesDiv.appendChild(div);
             }
@@ -1020,6 +1421,77 @@
                 return decodeURIComponent(escape(atob(text)));
             } catch (e) {
                 return '';
+            }
+        }
+
+        /**
+         * 把一个文本片段转成安全的行内 HTML（粗体、来源标签、换行）。
+         * 片段已经被 escapeHtml 转义过，所以这里插入的都是固定标签，不会引入 XSS。
+         */
+        function inlineMarkup(segment) {
+            return escapeHtml(segment)
+                .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+                .replace(/【来源：([^】]{1,30})】/g, '<span class="src-inline">来源：$1</span>')
+                .replace(/\n/g, '<br>');
+        }
+
+        /**
+         * 渲染回答正文：把文中的裸 URL 变成可点击链接，顺带处理粗体和来源标签。
+         *
+         * 关键点：URL 只在**原始文本**上用正则找，href 用 escapeAttr 转义，
+         * 其余片段用 escapeHtml 转义 —— 两边都不把未转义内容插进 HTML，
+         * 所以模型输出的任何内容都不会变成可执行标记。
+         */
+        function renderRichText(raw) {
+            const text = String(raw == null ? '' : raw);
+            const urlRe = /(https?:\/\/[^\s<>"'）)，。；】、*]+)/g;
+            let out = '';
+            let last = 0;
+            let m;
+            while ((m = urlRe.exec(text)) !== null) {
+                let url = m[1];
+                // 去掉被 markdown 或中文标点粘上的尾随符号（**url**、"url。" 等），
+                // 否则会生成 href 里带星号/句号的坏链接
+                const trail = url.match(/[.,;:!?*_~`）)\]】》"']+$/);
+                if (trail) url = url.slice(0, -trail[0].length);
+                if (!url || url.length < 12) continue;   // 太短的多半不是真链接，当普通文本
+                out += inlineMarkup(text.slice(last, m.index));
+                out += '<a class="msg-link" href="' + escapeAttr(url) +
+                       '" target="_blank" rel="noopener">' + escapeHtml(url) + '</a>';
+                last = m.index + url.length;
+            }
+            out += inlineMarkup(text.slice(last));
+            return out;
+        }
+
+        /** 复制文本到剪贴板，成功后在按钮上给个短反馈 */
+        async function copyText(text, btn) {
+            const flash = function() {
+                if (!btn) return;
+                const old = btn.textContent;
+                btn.textContent = '✓ 已复制';
+                setTimeout(function() { btn.textContent = old; }, 1200);
+            };
+            try {
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(text);
+                    flash();
+                    return;
+                }
+                throw new Error('clipboard unavailable');
+            } catch (e) {
+                // 退回到老办法（http 访问或旧浏览器）
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.style.position = 'fixed';
+                    ta.style.opacity = '0';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    flash();
+                } catch (e2) { /* 复制不了就算了，链接本身是可点的 */ }
             }
         }
 
@@ -1303,19 +1775,565 @@
         }
 
         // ============================================================
+        //  文献来源开关
+        // ============================================================
+
+        const SOURCE_LABELS = { all: '全部', en: '英文', cn: '中文' };
+
+        function setSourcePref(value) {
+            if (!SOURCE_LABELS[value]) value = 'all';
+            sourcePref = value;
+            try { localStorage.setItem('sourcePref', value); } catch (e) { /* 隐私模式下忽略 */ }
+            sourceSwitch.querySelectorAll('button[data-source]').forEach(function(btn) {
+                btn.classList.toggle('active', btn.dataset.source === value);
+            });
+        }
+
+        /** 后端有哪些源可用：中文源没配 appKey 时要让用户知道走了什么 */
+        async function loadSources() {
+            try {
+                const resp = await fetch('/api/sources', { credentials: 'include' });
+                const data = await resp.json();
+                if (!data.success) return;
+
+                const zh = (data.sources || []).filter(function(s) {
+                    return (s.languages || []).indexOf('zh') >= 0;
+                });
+                const on = zh.filter(function(s) { return s.available; }).map(function(s) { return s.label; });
+                const off = zh.filter(function(s) { return !s.available; }).map(function(s) { return s.label; });
+
+                let text = on.length ? ('中文来源：' + on.join('、')) : '中文来源：暂不可用';
+                if (off.length) text += '（' + off.join('、') + '未启用，配置 appKey 后自动启用）';
+                sourceHint.textContent = text;
+            } catch (e) {
+                // 拿不到提示不影响检索本身
+            }
+        }
+
+        sourceSwitch.addEventListener('click', function(e) {
+            const btn = e.target.closest('button[data-source]');
+            if (btn) setSourcePref(btn.dataset.source);
+        });
+
+        // ============================================================
+        //  论文卡片（结构化结果）
+        // ============================================================
+
+        function paperMetaLine(p) {
+            const authors = (p.authors || []);
+            const authorText = authors.slice(0, 4).join('、') + (authors.length > 4 ? ' 等' : '');
+            return [
+                authorText,
+                p.year || '',
+                p.venue || p.journal || '',
+                p.citationCount ? ('被引 ' + p.citationCount) : ''
+            ].filter(Boolean).join(' · ');
+        }
+
+        /**
+         * 渲染一轮检索结果卡片。
+         * 数据来自后端 SSE 的 papers 事件（工具返回的原始 JSON），
+         * 不再从 Markdown 里正则猜标题 —— 那样只能猜出一篇，也拿不到作者/年份。
+         */
+        function renderPaperCards(host, papers) {
+            if (!host || !papers || !papers.length) return;
+
+            const wrap = document.createElement('div');
+            wrap.className = 'paper-cards';
+
+            papers.forEach(function(p, idx) {
+                const card = document.createElement('div');
+                card.className = 'paper-card';
+                card.dataset.paperId = p.id || '';
+
+                const meta = paperMetaLine(p);
+                const abstractHtml = (p.abstract && p.abstract !== '暂无摘要')
+                    ? '<div class="pc-abstract">' + escapeHtml(p.abstract) + '</div>'
+                    : '';
+
+                // 链接分两种，顺序按"我只是想看看"来排：
+                //   url           = 来源页/DOI 页 —— HTML 网页，点开就能读，不会下载文件
+                //   openAccessPdf = 完整论文的 PDF 直链
+                // 全文链接指向**我们自己的代理端点**而不是原站直链：浏览器会忽略
+                // 跨域 <a download> 的文件名，只有同源下载才能把文件命名成
+                // "年份_第一作者_标题.pdf"（原站给的是 48962-Article Text-... 这种编号）
+                const linkRow = function(label, url, fulltext, extra, href) {
+                    const cls = fulltext ? ' is-fulltext' : '';
+                    return '<div class="pc-link-row">' +
+                        '<span class="pc-link-label' + cls + '">' + label + '</span>' +
+                        '<a class="pc-link-a' + cls + '" href="' + escapeAttr(href || url) +
+                            '" target="_blank" rel="noopener">' + escapeHtml(url) + '</a>' +
+                        (extra ? '<span class="pc-link-tag">' + extra + '</span>' : '') +
+                        '<button type="button" class="pc-copy" data-copy="' + escapeAttr(url) + '">复制</button>' +
+                        '</div>';
+                };
+
+                let linksHtml;
+                if (p.url || p.openAccessPdf) {
+                    const pageLabel = /doi\.org/.test(p.url || '') ? 'DOI 页' : '来源页';
+                    // 没有 PDF 直链时别一口咬定"只能看摘要"：
+                    // 开放获取（但源没给 pdf_url）的论文，网页里往往就能读全文
+                    const noFullNote = p.isOa
+                        ? '该源未提供 PDF 直链；这篇属开放获取，网页里可能就能读全文'
+                        : '这篇不是开放获取，网页通常只显示摘要';
+                    const pdfHref = p.id
+                        ? '/api/paper/' + encodeURIComponent(p.id) + '/pdf'
+                        : p.openAccessPdf;
+
+                    linksHtml = '<div class="pc-links">' +
+                        (p.url ? linkRow('阅读', p.url, false, '网页') : '') +
+                        (p.openAccessPdf
+                            ? linkRow('全文', p.openAccessPdf, true, '下载', pdfHref)
+                            : '') +
+                        (!p.openAccessPdf && p.url ? '<div class="pc-link-note">' + noFullNote + '</div>' : '') +
+                        '</div>';
+                } else {
+                    linksHtml = '<div class="pc-links"><div class="pc-link-row">' +
+                        '<span class="pc-link-label">链接</span>' +
+                        '<span class="pc-nolink">该数据源未提供原文链接</span></div></div>';
+                }
+
+                card.innerHTML = `
+                    <div class="pc-head">
+                        <span class="pc-title">${idx + 1}. ${escapeHtml(p.title || '未知标题')}</span>
+                        <span class="src-tag" data-source="${escapeAttr(p.source || '')}">${escapeHtml(p.sourceLabel || p.source || '未知来源')}</span>
+                    </div>
+                    ${meta ? '<div class="pc-meta">' + escapeHtml(meta) + '</div>' : ''}
+                    ${abstractHtml}
+                    ${linksHtml}
+                    <div class="pc-actions">
+                        <button type="button" class="pc-fav">⭐ 收藏</button>
+                        <button type="button" class="pc-more">📄 详情</button>
+                        <button type="button" class="pc-cite">📋 复制引用</button>
+                    </div>
+                    <div class="pc-detail" style="display:none;"></div>
+                `;
+
+                const detailBox = card.querySelector('.pc-detail');
+
+                // 用闭包绑定，避免把标题/作者塞进 HTML 属性再解码
+                card.querySelector('.pc-fav').addEventListener('click', function() {
+                    doFavorite(p.id, p.title, (p.authors || []).join('、'), String(p.year || ''), this);
+                });
+
+                card.querySelector('.pc-more').addEventListener('click', function() {
+                    const showing = detailBox.style.display === 'block';
+                    detailBox.style.display = showing ? 'none' : 'block';
+                    if (!showing && !card.dataset.detailLoaded) {
+                        loadPaperDetail(card, p, detailBox);
+                    }
+                });
+
+                card.querySelectorAll('.pc-copy').forEach(function(btn) {
+                    btn.addEventListener('click', function() {
+                        copyText(btn.dataset.copy || '', btn);
+                    });
+                });
+
+                // 复制引用：用当前在"文献表"里选的格式。
+                // 单篇复制不带 [序号]（序号是给整篇参考文献表用的）
+                card.querySelector('.pc-cite').addEventListener('click', function() {
+                    copyText(formatCitation(p, citeStyle, null), this);
+                });
+
+                wrap.appendChild(card);
+            });
+
+            host.appendChild(wrap);
+        }
+
+        /** 点"详情"时直连后端取数据，不再花一次大模型调用 */
+        async function loadPaperDetail(card, paper, box) {
+            box.classList.remove('error');
+            box.textContent = '加载中...';
+            try {
+                const resp = await fetch('/api/paper/' + encodeURIComponent(paper.id), {
+                    credentials: 'include'
+                });
+                const data = await resp.json();
+                if (!data.success) {
+                    box.classList.add('error');
+                    box.textContent = '❌ ' + (data.error || '获取详情失败');
+                    return;
+                }
+                const d = data.paper || {};
+                const lines = [];
+                lines.push('作者：' + ((d.authors || []).join('、') || '未知'));
+                lines.push('来源：' + (d.sourceLabel || '') + (d.language ? '（' + d.language + '）' : ''));
+                lines.push('年份：' + (d.year || '未知') + (d.venue ? '　期刊/会议：' + d.venue : ''));
+                lines.push('被引：' + (d.citationCount || 0)
+                    + (typeof d.referenceCount === 'number' ? '　参考文献：' + d.referenceCount : ''));
+                if (d.doi) lines.push('DOI：' + d.doi);
+                if ((d.fieldsOfStudy || []).length) lines.push('主题：' + d.fieldsOfStudy.join('、'));
+                lines.push('全文：' + (d.openAccessPdf
+                    ? d.openAccessPdf
+                    : '该数据源未提供免费全文（源地址：' + (d.url || '无') + '）'));
+                if (d.oaStatus) lines.push('开放获取类型：' + d.oaStatus);
+                lines.push('');
+                lines.push('摘要：' + (d.abstract || '暂无摘要'));
+                box.textContent = lines.join('\n');
+                card.dataset.detailLoaded = '1';
+            } catch (e) {
+                box.classList.add('error');
+                box.textContent = '❌ 网络错误：' + e.message;
+            }
+        }
+
+        // ============================================================
+        //  参考文献格式化 + 精读文献表
+        //  （对应命题"必须实现的四大核心功能"里的
+        //    文献检索筛选 → 精读文献表，以及参考文献自动化格式）
+        // ============================================================
+
+        let lastPapers = [];                 // 最近一轮检索结果（文献表的数据源）
+        let citeStyle = 'gbt7714';
+        let tableSort = { key: 'relevance', desc: true };
+
+        // 文献类型标识：[J]期刊 [C]会议 [D]学位论文 [M]图书 [EB/OL]预印本
+        const DOC_MARK = { journal: 'J', conference: 'C', thesis: 'D', book: 'M', preprint: 'EB/OL' };
+        const BIB_TYPE = {
+            journal: 'article', conference: 'inproceedings', thesis: 'phdthesis',
+            book: 'book', preprint: 'misc',
+        };
+
+        function docMark(p) {
+            return '[' + (DOC_MARK[p.docType] || 'J') + ']';
+        }
+
+        /** GB/T 7714 对英文作者要求"姓全大写 + 名缩写"，中文作者原样 */
+        function gbtAuthor(name) {
+            const s = String(name || '').trim();
+            if (!s) return '';
+            if (/[\u4e00-\u9fff]/.test(s)) return s.replace(/\s+/g, '');
+            const parts = s.split(/\s+/).filter(Boolean);
+            if (parts.length === 1) return parts[0].toUpperCase();
+            const family = parts[parts.length - 1].toUpperCase();
+            // 连字符名（Hong-Bing）按国标缩成 "H B"，而不是只取首字母
+            const initials = parts.slice(0, -1).map(function(w) {
+                return w.split('-').map(function(x) {
+                    return x[0] ? x[0].toUpperCase() : '';
+                }).filter(Boolean).join(' ');
+            }).join(' ');
+            return family + ' ' + initials;
+        }
+
+        /** GB/T 7714-2015：3 个以内全列，超过 3 个列前 3 个 + 等 / et al */
+        function gbtAuthors(authors) {
+            const list = (authors || []).map(gbtAuthor).filter(Boolean);
+            if (!list.length) return '佚名';
+            if (list.length <= 3) return list.join(', ');
+            const isZh = list.some(function(a) { return /[\u4e00-\u9fff]/.test(a); });
+            return list.slice(0, 3).join(', ') + (isZh ? ', 等' : ', et al');
+        }
+
+        function formatGBT7714(p, idx) {
+            const seg = [gbtAuthors(p.authors) + '.'];
+            seg.push((p.title || '') + docMark(p) + '.');
+            // 期刊名缺失时必须显式标注：否则会拼出 "[J]. 1999, 27: 58-60." 这种塌掉的引用
+            // （实测 Semantic Scholar 常不给 venue/journal），[刊名不详] 是国标里的占位写法
+            let src = (p.journal || p.venue || '').trim() || '[刊名不详]';
+            if (p.year && p.year !== '未知') src += (src ? ', ' : '') + p.year;
+            if (p.volume) src += ', ' + p.volume + (p.issue ? '(' + p.issue + ')' : '');
+            if (p.pages) src += ': ' + p.pages;
+            if (src) seg.push(src + '.');
+            if (p.doi) seg.push('DOI: ' + p.doi + '.');
+            const text = seg.join(' ').replace(/\s+/g, ' ').trim();
+            return (idx === undefined || idx === null) ? text : '[' + (idx + 1) + '] ' + text;
+        }
+
+        function apaAuthors(authors) {
+            const list = (authors || []).filter(Boolean);
+            if (!list.length) return '佚名';
+            const names = list.map(function(a) {
+                const s = String(a).trim();
+                if (/[\u4e00-\u9fff]/.test(s)) return s.replace(/\s+/g, '');
+                const parts = s.split(/\s+/).filter(Boolean);
+                if (parts.length === 1) return parts[0];
+                const family = parts[parts.length - 1];
+                const initials = parts.slice(0, -1).map(function(w) {
+                    return (w[0] || '').toUpperCase() + '.';
+                }).join(' ');
+                return family + ', ' + initials;
+            });
+            if (names.length === 1) return names[0];
+            return names.slice(0, -1).join(', ') + ', & ' + names[names.length - 1];
+        }
+
+        function formatAPA(p) {
+            const year = (p.year && p.year !== '未知') ? p.year : 'n.d.';
+            let s = apaAuthors(p.authors) + ' (' + year + '). ' + (p.title || '') + '.';
+            const journal = (p.journal || p.venue || '').trim();
+            if (journal) {
+                s += ' ' + journal;
+                if (p.volume) s += ', ' + p.volume;
+                if (p.issue) s += '(' + p.issue + ')';
+                if (p.pages) s += ', ' + p.pages;
+                s += '.';
+            } else {
+                // 没有刊名（常见于预印本/S2 缺字段）：补占位说明，别让读者以为是排版错误
+                s += ' [刊名不详]';
+                if (p.pages) s += ' ' + p.pages + '.';
+            }
+            if (p.doi) s += ' https://doi.org/' + p.doi;
+            return s.replace(/\s+/g, ' ').trim();
+        }
+
+        function bibtexKey(p, idx) {
+            // key 保持纯 ASCII：中文 key 在老版 bibtex 引擎下会直接报错，
+            // 而中文姓名没法在不引入拼音库的前提下转写，所以用 cn 前缀 + 年份 + 标题里的 ASCII 词
+            const ascii = function(s) { return String(s || '').replace(/[^A-Za-z0-9]/g, ''); };
+            const first = String((p.authors || [])[0] || '');
+            let fam;
+            if (/[\u4e00-\u9fff]/.test(first)) {
+                fam = 'cn';
+            } else {
+                const parts = first.split(/\s+/).filter(Boolean);
+                fam = ascii(parts.length ? parts[parts.length - 1] : '');
+            }
+            const year = (p.year && p.year !== '未知') ? String(p.year) : '';
+            const word = ascii(String(p.title || '').replace(/[\u4e00-\u9fff]/g, '')).slice(0, 12);
+            const key = fam + year + word;
+            return key || ('ref' + ((idx || 0) + 1));
+        }
+
+        function formatBibTeX(p, idx, keyOverride) {
+            const type = BIB_TYPE[p.docType] || 'article';
+            const lines = ['@' + type + '{' + (keyOverride || bibtexKey(p, idx)) + ','];
+            const add = function(k, v) {
+                if (v) lines.push('  ' + k + ' = {' + String(v).replace(/[{}]/g, '') + '},');
+            };
+            add('title', p.title);
+            add('author', (p.authors || []).join(' and '));
+            add('journal', p.journal || p.venue);
+            add('year', (p.year && p.year !== '未知') ? p.year : '');
+            add('volume', p.volume);
+            add('number', p.issue);
+            add('pages', p.pages);
+            add('doi', p.doi);
+            add('url', p.url);
+            lines.push('}');
+            return lines.join('\n');
+        }
+
+        function formatCitation(p, style, idx) {
+            if (style === 'apa') return formatAPA(p);
+            if (style === 'bibtex') return formatBibTeX(p, idx);
+            return formatGBT7714(p, idx);
+        }
+
+        function citationList(style) {
+            if (!lastPapers.length) return '';
+            if (style === 'bibtex') {
+                // BibTeX 的 key 必须唯一，否则导入文献管理器时会互相覆盖
+                const used = {};
+                return lastPapers.map(function(p, i) {
+                    let key = bibtexKey(p, i);
+                    if (used[key]) {
+                        used[key] += 1;
+                        key = key + String.fromCharCode(96 + used[key]);   // a, b, c...
+                    }
+                    used[key] = used[key] || 1;
+                    return formatBibTeX(p, i, key);
+                }).join('\n\n');
+            }
+            return lastPapers.map(function(p, i) { return formatCitation(p, style, i); }).join('\n');
+        }
+
+        // ── 精读文献表 ─────────────────────────────────────────
+
+        function scoreClass(score) {
+            if (score >= 70) return 'score-high';
+            if (score >= 40) return 'score-mid';
+            return 'score-low';
+        }
+
+        function sortedPapers() {
+            const key = tableSort.key;
+            const arr = lastPapers.slice();
+            arr.sort(function(a, b) {
+                let x = a[key], y = b[key];
+                if (key === 'title') {
+                    x = String(x || ''); y = String(y || '');
+                    return tableSort.desc ? y.localeCompare(x, 'zh') : x.localeCompare(y, 'zh');
+                }
+                x = Number(x) || 0;
+                y = Number(y) || 0;
+                return tableSort.desc ? y - x : x - y;
+            });
+            return arr;
+        }
+
+        function renderPaperTable() {
+            const host = document.getElementById('tableBody');
+            if (!host) return;
+
+            if (!lastPapers.length) {
+                host.innerHTML = '<div class="toolbar-hint">还没有检索结果。先发起一次检索，结果会自动汇总成精读文献表。</div>';
+                document.getElementById('citationPreview').textContent = '（选择格式后这里会显示全部引用文本）';
+                document.getElementById('tableHint').textContent = '';
+                return;
+            }
+
+            const sorted = sortedPapers();
+            const arrow = tableSort.desc ? ' ↓' : ' ↑';
+            const th = function(key, label, cls) {
+                return '<th class="' + (cls || '') + '" onclick="sortPaperTable(\'' + key + '\')">' +
+                    label + (tableSort.key === key ? arrow : '') + '</th>';
+            };
+
+            let html = '<table class="paper-table"><thead><tr>' +
+                '<th class="col-idx">#</th>' +
+                th('title', '标题') +
+                th('relevance', '相关度', 'col-score') +
+                th('year', '年份', 'col-year') +
+                th('citationCount', '被引') +
+                '<th class="col-full">全文</th>' +
+                '</tr></thead><tbody>';
+
+            sorted.forEach(function(p, i) {
+                const authors = (p.authors || []).slice(0, 3).join('、') +
+                    ((p.authors || []).length > 3 ? ' 等' : '');
+                const venue = p.journal || p.venue || '';
+                const sub = [authors, venue, p.sourceLabel].filter(Boolean).join(' · ');
+                const idx = lastPapers.indexOf(p);
+                html += '<tr>' +
+                    '<td class="col-idx">' + (idx + 1) + '</td>' +
+                    '<td><div class="t-title">' + escapeHtml(p.title || '') + '</div>' +
+                        '<div class="t-sub">' + escapeHtml(sub) + '</div></td>' +
+                    '<td class="col-score"><span class="score-pill ' + scoreClass(p.relevance) + '">' +
+                        (p.relevance == null ? '-' : p.relevance) + '</span></td>' +
+                    '<td class="col-year">' + escapeHtml(String(p.year || '')) + '</td>' +
+                    '<td>' + (p.citationCount || 0) + '</td>' +
+                    '<td class="col-full">' + (p.openAccessPdf
+                        ? '<span class="full-yes">可获取</span>'
+                        : '<span class="full-no">仅摘要</span>') + '</td>' +
+                    '</tr>';
+            });
+            html += '</tbody></table>';
+            host.innerHTML = html;
+
+            const withFull = lastPapers.filter(function(p) { return p.openAccessPdf; }).length;
+            document.getElementById('tableHint').textContent =
+                '共 ' + lastPapers.length + ' 篇，其中 ' + withFull + ' 篇可获取全文';
+            document.getElementById('citationPreview').textContent = citationList(citeStyle);
+        }
+
+        function sortPaperTable(key) {
+            if (tableSort.key === key) {
+                tableSort.desc = !tableSort.desc;
+            } else {
+                tableSort.key = key;
+                tableSort.desc = (key !== 'title' && key !== 'year') ? true : false;
+                if (key === 'year') tableSort.desc = true;
+            }
+            renderPaperTable();
+        }
+
+        function toggleTablePanel() {
+            const panel = document.getElementById('tablePanel');
+            const showing = panel.style.display === 'block';
+            if (showing) {
+                panel.style.display = 'none';
+                return;
+            }
+            renderPaperTable();
+            panel.style.display = 'block';
+        }
+
+        function closeTablePanel() {
+            document.getElementById('tablePanel').style.display = 'none';
+        }
+
+        function onCiteStyleChange() {
+            citeStyle = document.getElementById('citeStyle').value;
+            try { localStorage.setItem('citeStyle', citeStyle); } catch (e) { /* 隐私模式忽略 */ }
+            renderPaperTable();
+        }
+
+        function copyAllCitations() {
+            if (!lastPapers.length) return;
+            copyText(citationList(citeStyle), null);
+            const hint = document.getElementById('tableHint');
+            const old = hint.textContent;
+            hint.textContent = '✓ 已复制 ' + lastPapers.length + ' 条引用';
+            setTimeout(function() { hint.textContent = old; }, 1500);
+        }
+
+        function downloadBlob(text, filename, mime) {
+            const blob = new Blob([text], { type: mime || 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+        }
+
+        function csvCell(v) {
+            return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+        }
+
+        function exportPapersCsv() {
+            if (!lastPapers.length) {
+                alert('还没有检索结果');
+                return;
+            }
+            const head = ['序号', '标题', '作者', '年份', '期刊/会议', '来源', '语种',
+                          '相关度', '被引', '卷', '期', '页码', 'DOI', '全文可得', '原文链接', '全文链接'];
+            const rows = lastPapers.map(function(p, i) {
+                return [
+                    i + 1, p.title, (p.authors || []).join('、'), p.year,
+                    p.journal || p.venue, p.sourceLabel, p.language,
+                    p.relevance, p.citationCount, p.volume, p.issue, p.pages,
+                    p.doi, p.openAccessPdf ? '是' : '否', p.url, p.openAccessPdf,
+                ].map(csvCell).join(',');
+            });
+            // \ufeff 是 BOM：不加的话 Excel 打开中文会乱码
+            downloadBlob('\ufeff' + head.map(csvCell).join(',') + '\n' + rows.join('\n'),
+                         '精读文献表.csv', 'text/csv;charset=utf-8');
+        }
+
+        function exportCitationsTxt() {
+            if (!lastPapers.length) {
+                alert('还没有检索结果');
+                return;
+            }
+            const ext = citeStyle === 'bibtex' ? 'bib' : 'txt';
+            downloadBlob(citationList(citeStyle), '参考文献.' + ext, 'text/plain;charset=utf-8');
+        }
+
+        // 恢复上次选的引用格式
+        try {
+            const savedCite = localStorage.getItem('citeStyle');
+            if (savedCite) {
+                citeStyle = savedCite;
+                const sel = document.getElementById('citeStyle');
+                if (sel) sel.value = savedCite;
+            }
+        } catch (e) { /* 隐私模式忽略 */ }
+
+        // ============================================================
         //  收藏功能
         // ============================================================
 
-        async function doFavorite(paperId, title) {
+        async function doFavorite(paperId, title, authors, year, btn) {
             if (requireLogin('收藏功能')) return;
 
-            const idForFav = paperId || 'title_' + title.replace(/[《》\s]/g, '_').substring(0, 50);
+            const idForFav = paperId || 'title_' + String(title || '').replace(/[《》\s]/g, '_').substring(0, 50);
 
             try {
                 const checkResp = await fetch(`/api/favorites/${encodeURIComponent(idForFav)}`, {
                     credentials: 'include'
                 });
                 const checkData = await checkResp.json();
+
+                function syncBtn(faved) {
+                    if (!btn) return;
+                    btn.classList.toggle('btn-fav-on', faved);
+                    btn.textContent = faved ? '⭐ 已收藏' : '⭐ 收藏';
+                }
 
                 if (checkData.is_favorited) {
                     const resp = await fetch(`/api/favorites/${encodeURIComponent(idForFav)}`, {
@@ -1325,6 +2343,7 @@
                     const data = await resp.json();
                     if (data.success) {
                         addMessage('assistant', `✅ 已取消收藏：《${title}》`);
+                        syncBtn(false);
                     } else {
                         addMessage('assistant', `❌ ${data.error || '取消收藏失败'}`);
                     }
@@ -1332,17 +2351,19 @@
                     const resp = await fetch('/api/favorites', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
+                        // 作者/年份来自结构化检索结果，不再写空串
                         body: JSON.stringify({
                             paper_id: idForFav,
                             paper_title: title,
-                            authors: '',
-                            year: ''
+                            authors: authors || '',
+                            year: year || ''
                         }),
                         credentials: 'include'
                     });
                     const data = await resp.json();
                     if (data.success) {
                         addMessage('assistant', `✅ 已收藏：《${title}》`);
+                        syncBtn(true);
                     } else {
                         addMessage('assistant', `❌ ${data.error || '收藏失败'}`);
                     }
@@ -1352,12 +2373,12 @@
             }
         }
 
-        function toggleFavorite(paperId, title, authors, year) {
+        function toggleFavorite(paperId, title, authors, year, btn) {
             if (!title) {
                 addMessage('assistant', '❌ 无法收藏：缺少论文标题');
                 return;
             }
-            doFavorite(paperId, title);
+            doFavorite(paperId, title, authors, year, btn);
         }
 
         // ============================================================
@@ -1383,7 +2404,9 @@
                     data.favorites.forEach((fav, idx) => {
                         const title = fav.paper_title || '未命名论文';
                         msg += `${idx+1}. **${title}**\n`;
-                        msg += `   📌 收藏时间：${new Date(fav.added_at).toLocaleString()}\n`;
+                        const extra = [fav.authors, fav.year].filter(Boolean).join(' · ');
+                        if (extra) msg += `   👤 ${extra}\n`;
+                        msg += `   📌 收藏时间：${formatConvTime(fav.added_at) || fav.added_at}\n`;
                         msg += `   🗑️ 回复 **删除 ${idx+1}** 取消收藏\n\n`;
                     });
                     msg += '💡 回复 **删除 序号** 可取消对应收藏（如：删除 1）';
@@ -1601,7 +2624,7 @@
             div.className = `message ${role}`;
             div.innerHTML = `
                 <div class="label">${role === 'user' ? '你' : '助手'}</div>
-                <div class="bubble">${escapeHtml(content)}</div>
+                <div class="bubble">${renderRichText(content)}</div>
             `;
             messagesDiv.appendChild(div);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -1619,6 +2642,52 @@
             sendBtn.disabled = loading;
             input.disabled = loading;
             sendBtn.textContent = loading ? '思考中...' : '发送';
+        }
+
+        /**
+         * 在一轮回答期间显示"程序在跑"的进度提示。
+         *
+         * 为什么需要：学术接口经常要退避重试，十几秒没有任何输出是常态。
+         * 只放三个点的话用户分不清"在检索"还是"已经卡死"。
+         * 所以这里同时给出：转圈动画 + 当前阶段文字 + 实时已等待秒数，
+         * 超过 6 秒再补一句说明，让人安心等下去。
+         */
+        function startLoading(bubble) {
+            bubble.innerHTML = `
+                <div class="loading-card">
+                    <span class="spinner"></span>
+                    <span class="loading-text">正在思考…</span>
+                    <span class="loading-elapsed">0.0s</span>
+                </div>
+                <div class="loading-hint" style="display:none;">
+                    学术检索接口首次响应较慢，通常需要 5–20 秒，请稍候…
+                </div>
+            `;
+            const textEl = bubble.querySelector('.loading-text');
+            const elapsedEl = bubble.querySelector('.loading-elapsed');
+            const hintEl = bubble.querySelector('.loading-hint');
+            const startedAt = Date.now();
+            let stopped = false;
+
+            const timer = setInterval(function() {
+                if (stopped) return;
+                const sec = (Date.now() - startedAt) / 1000;
+                if (elapsedEl) elapsedEl.textContent = sec.toFixed(1) + 's';
+                if (hintEl && sec > 6 && hintEl.style.display === 'none') {
+                    hintEl.style.display = 'block';
+                }
+            }, 100);
+
+            return {
+                status: function(text) {
+                    if (!stopped && textEl && text) textEl.textContent = text;
+                },
+                done: function() {
+                    if (stopped) return;
+                    stopped = true;
+                    clearInterval(timer);
+                },
+            };
         }
 
         function extractPapersAndAddFavButtons(content) {
@@ -1691,15 +2760,22 @@
             placeholder.className = 'message assistant';
             placeholder.innerHTML = `
                 <div class="label">助手</div>
-                <div class="bubble" id="assistant-bubble"></div>
+                <div class="bubble"></div>
             `;
             messagesDiv.appendChild(placeholder);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
-            const bubble = document.getElementById('assistant-bubble');
-            bubble.innerHTML = '<div class="thinking-dots"><span></span><span></span><span></span></div>';
+            // ⚠️ 原来这里写的是 document.getElementById('assistant-bubble')：
+            // 每条助手气泡都会带上同一个 id 且从不移除，所以从第二轮开始
+            // getElementById 命中的是【第一条】旧气泡 —— 答案被写进了上一条消息，
+            // 新气泡永远停在加载动画上，看起来就像卡死。
+            // 现在直接持有刚创建的元素引用，不查 DOM。
+            const bubble = placeholder.querySelector('.bubble');
+            const loader = startLoading(bubble);
+            let streamStarted = false;
             let fullContent = '';
             let newConversationId = null;
+            let gotCards = false;   // 收到结构化论文卡片后就不再走正则兜底
 
             try {
                 const resp = await fetch('/api/chat', {
@@ -1709,6 +2785,7 @@
                         message: text,
                         history: messageHistory,
                         conversation_id: activeConversationId,
+                        source_pref: sourcePref,
                     }),
                     credentials: 'include',
                 });
@@ -1730,12 +2807,25 @@
                         try {
                             const data = JSON.parse(line.slice(6));
                             if (data.type === 'token') {
+                                if (!streamStarted) { streamStarted = true; loader.done(); }
                                 fullContent += data.token;
-                                bubble.textContent = fullContent;
+                                bubble.innerHTML = renderRichText(fullContent);
                                 messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                            } else if (data.type === 'status') {
+                                // 阶段提示：正在思考… / 正在检索文献源… / 正在生成回答…
+                                if (!streamStarted) loader.status(data.text);
                             } else if (data.type === 'conversation_id') {
                                 newConversationId = data.conversation_id;
+                            } else if (data.type === 'papers') {
+                                renderPaperCards(placeholder, data.papers);
+                                gotCards = true;
+                                // 同步喂给"精读文献表"：卡片和表格用的是同一份结构化数据
+                                lastPapers = data.papers || [];
+                                renderPaperTable();
+                                messagesDiv.scrollTop = messagesDiv.scrollHeight;
                             } else if (data.type === 'error') {
+                                streamStarted = true;
+                                loader.done();
                                 bubble.textContent = '❌ ' + data.message;
                             }
                         } catch (e) { /* ignore */ }
@@ -1746,7 +2836,8 @@
                     messageHistory.push({ role: 'user', content: text });
                     messageHistory.push({ role: 'assistant', content: fullContent });
 
-                    extractPapersAndAddFavButtons(fullContent);
+                    // 兜底：老格式（没有结构化 cards）时仍按 Markdown 猜一个收藏按钮
+                    if (!gotCards) extractPapersAndAddFavButtons(fullContent);
                 }
 
                 // 登录用户：服务端已存好这段对话，刷新左侧列表
@@ -1758,7 +2849,16 @@
                 }
 
             } catch (e) {
+                loader.done();
+                streamStarted = true;
                 bubble.textContent = '❌ 网络错误: ' + e.message;
+            }
+
+            // 收尾：无论如何都要停掉计时器；如果整轮一个 token 都没收到，
+            // 也不能把一个转圈的动画永久留在界面上
+            loader.done();
+            if (!streamStarted) {
+                bubble.textContent = '（本轮没有收到回复内容，请重试）';
             }
 
             setLoading(false);
@@ -1812,6 +2912,8 @@
         });
 
         checkLogin();
+        setSourcePref(sourcePref);   // 恢复上次选的文献来源
+        loadSources();               // 显示当前可用的中文源
 
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {

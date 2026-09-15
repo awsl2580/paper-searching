@@ -8,9 +8,12 @@ import sys
 import subprocess
 import json
 import re
+import queue
+import asyncio
 import threading
 import time
 from datetime import datetime
+from urllib.parse import quote
 
 # ── 自动检查并安装依赖 ────────────────────────────────────
 REQUIRED_PACKAGES = {
@@ -46,7 +49,7 @@ if missing:
 # ── 第三方导入 ────────────────────────────────────────────
 import requests
 from requests.adapters import HTTPAdapter
-from flask import Flask, Response, jsonify, request, session
+from flask import Flask, Response, jsonify, request, session, stream_with_context
 from functools import wraps
 
 from langchain.agents import create_agent
@@ -79,49 +82,95 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# ── Semantic Scholar 访问层 ───────────────────────────────
-# 节流 / 指数退避 / 缓存 / 可选 API Key 都封装在 s2_client 里，
-# CLI 版 Agent.py 共用同一份实现，避免两边逻辑漂移。
-# 关键结论（实测）：不配 API Key 时所有人共用公共通道，/paper/search 高峰期必被限流；
-# 配置 SEMANTIC_SCHOLAR_API_KEY 可获得独立配额。详见 s2_client.py 顶部注释。
-import s2_client
+# ── 文献数据源：多源聚合层 ────────────────────────────────
+# 数据源不是单一的 Semantic Scholar，而是 providers/ 下的多源聚合：
+#   semantic_scholar  英文，免费公共配额（高峰期会限流）
+#   openalex          英+中，完全免费无需 key，中文靠 filter=language:zh
+# 节流 / 指数退避 / 缓存 / 跨源去重都在 providers 里，CLI 版 Agent.py 共用同一份。
+# 换源或加源只需要新增 providers/xxx.py 并在注册表里加一行，本文件不用动。
+import providers
 
 
 DEFAULT_SYSTEM_PROMPT = """你是一个专业的学术文献检索助手。你的任务是帮助用户查找和了解学术论文。
 
+你的检索结果来自多个数据源（Semantic Scholar、OpenAlex），
+每条结果里都有 sourceLabel 字段标明来源，language 字段标明语种（en/zh）。
+
 你可以使用以下工具：
-- search_papers：根据关键词搜索学术论文，返回论文列表（含标题、作者、年份、摘要概要）
-- get_paper_detail：获取某篇论文的详细信息（含完整摘要、引用数、发表期刊/会议等）
+- search_papers：搜索学术论文，返回论文列表（含标题、作者、年份、摘要概要、来源、链接）
+- get_paper_detail：按论文 id（或标题）获取详细信息（含完整摘要、引用数、发表期刊等）
 
 使用规则：
 1. 当用户询问某个领域或主题的论文时，先用 search_papers 搜索
-2. 将搜索到的论文以简洁的编号列表呈现给用户，每条包含：标题、作者、年份、简短摘要
-3. 回复时请用中文，保持专业且友好的学术交流风格
-4. 工具返回 JSON。如果结果是 {"error": "rate_limited", ...}，说明检索接口正在限流
-   （这不是服务故障，也不是接口下线）。此时请：
-   - 直接把 message 和 suggestion 里的内容转述给用户，不要自己编造"服务不可用/接口故障"之类的结论
-   - 可以主动再调用一次 search_papers 重试（相同检索会命中本地缓存，重试成本很低）
-   - 如果重试仍被限流，建议用户配置 SEMANTIC_SCHOLAR_API_KEY，或过一会儿再问
-   - 不要连续反复重试同一个查询超过两次"""
+2. search_papers 的 source 参数控制检索范围：
+   - "all" 中文 + 英文（默认）
+   - "cn" 仅中文文献（用户说"中文文献""国内研究"时用）
+   - "en" 仅英文文献（用户说"英文文献""外文"时用）
+3. 【最重要】检索结果会由界面自动渲染成"论文卡片"显示在回答下方，
+   卡片里已经包含作者、年份、期刊、被引次数、摘要、来源标签、
+   原文链接、PDF 链接，以及「收藏」「详情」按钮。
+   所以你的正文**绝对不要重复这些字段**，只写两部分：
+
+   (a) 开头一句话概括：主题、共几篇，必要时点出覆盖的方向或年份跨度；
+   (b) 一个「编号. 标题」的清单，每条只占一行。
+
+   正文里不要写作者、期刊、摘要、被引次数、链接、来源标注。
+   这份清单必须保留，因为用户下一轮会说"看第 2 篇的详细信息"，
+   而对话上下文里只有你的正文，没有卡片数据。
+
+   反例（不要这样写——这些信息卡片里全都有，写一遍就是重复）：
+     "1. 乡村振兴背景下货币政策… 作者：唐文婷｜2022｜摘要：利用向量自回归模型…
+      链接：https://doi.org/10.xxxx"
+   正例：
+     "1. 乡村振兴背景下货币政策的农业产业发展效应探究"
+4. 当用户说"看第X篇的详细信息"时，把该篇的 id 字段原样传给 get_paper_detail。
+   这种情况下没有卡片，你可以把完整摘要、引用数、期刊、链接都写清楚。
+5. 只有在用户**明确索要链接**时，才在正文里写出 URL。这时要分清楚两个字段：
+   - url = 网页地址（来源页 / DOI 页），点开是普通网页，能直接在浏览器里浏览
+   - openAccessPdf = 完整论文的 PDF 直链；有些期刊点开会**直接下载文件**
+   用户说"只是想看看 / 浏览一下"时给 url；明确说"要全文 / 要 PDF"时给 openAccessPdf。
+   两个都照抄，**绝对不要自己拼造、改写或猜测 URL**（尤其是 DOI）；
+   字段为空就如实说明"该源未提供"，不要编一个出来
+6. 如果结果是 {"error": "rate_limited", ...}，说明数据源被限流了（这不是故障）：
+   - 直接把 message 和 suggestion 里的内容转述给用户，不要自己编造"服务不可用"之类的结论
+   - 可以再调用一次 search_papers 重试（相同检索会命中本地缓存，重试成本很低）
+   - 不要连续反复重试同一个查询超过两次
+7. 如果结果里的 warnings 字段非空（某个源本次检索失败、结果不完整），
+   只用半句话在末尾带过，例如"（Semantic Scholar 本次被限流，以上为 OpenAlex 来源）"。
+   不要单独写一段数据源状态说明，更不要把"未配置/未启用"这类部署信息讲给用户听。
+8. 回复时请用中文，保持专业且友好的学术交流风格
+9. 不要编造检索结果里没有的论文、作者、引用数或链接
+10. 界面会自动把检索结果汇总成"精读文献表"（含相关度打分、可导出 CSV），
+    并支持一键生成 GB/T 7714 / APA / BibTeX 三种参考文献格式。
+    所以：用户要参考文献格式时，不必手工排版，告诉他去「📊 文献表」面板切换格式即可；
+    用户嫌结果太杂/要"高相关的"时，用 search_papers 的 min_relevance 参数（给 40-60）收紧，
+    不要自己在正文里人工剔除。"""
 
 
 @tool
-def search_papers(query: str, limit: int = 5) -> str:
-    """搜索学术论文。参数: query=搜索关键词（英文最佳），limit=返回数量（默认5，最多10）。"""
-    return s2_client.search_papers(query, limit)
+def search_papers(query: str, limit: int = 5, source: str = "all", min_relevance: int = 0) -> str:
+    """搜索学术论文。
+
+    参数:
+        query: 搜索关键词（中文主题用中文，英文主题用英文）
+        limit: 返回数量（默认5，最多10）
+        source: 检索范围，'all'=中英文全部(默认)、'cn'=仅中文文献、'en'=仅英文文献
+        min_relevance: 相关度下限 0-100。默认 0（只剔除查询词完全没命中的）。
+                       用户要求"高相关""严格筛选""精读文献表"时给 40-60。
+
+    返回的每篇论文里：
+        relevance      相关度分（0-100，标题命中权重更高）
+        openAccessPdf  全文 PDF 直链（能读到完整论文）
+        url            来源页/DOI 页（付费论文只有摘要页）
+        volume/issue/pages  卷期页码（生成参考文献格式要用）
+    """
+    return providers.search_papers(query, limit, source, min_relevance)
 
 
 @tool
 def get_paper_detail(paper_id: str) -> str:
-    """获取论文详细信息。"""
-    if not paper_id or not paper_id.strip():
-        return json.dumps({"error": "请提供论文ID或标题"}, ensure_ascii=False)
-
-    pid = paper_id.strip()
-
-    if len(pid) == 40 and all(c in "0123456789abcdef" for c in pid.lower()):
-        return s2_client.get_paper_by_id(pid)
-    return s2_client.get_paper_by_title(pid)
+    """获取论文详细信息。参数 paper_id 可以是检索结果里的 id 字段，也可以是论文标题。"""
+    return providers.get_detail(paper_id)
 
 
 def build_agent():
@@ -284,10 +333,13 @@ def clear_all_conversations():
 @app.post("/api/favorites")
 @login_required
 def add_favorite():
-    """添加收藏 - 简化版"""
+    """添加收藏"""
     data = request.get_json(force=True, silent=True) or {}
     paper_id = data.get('paper_id', '').strip()
     paper_title = data.get('paper_title', '').strip()
+    # 作者/年份：前端从结构化检索结果里带过来，让收藏列表有出处信息
+    authors = str(data.get('authors') or '').strip()
+    year = str(data.get('year') or '').strip()
 
     if not paper_title:
         return jsonify({"error": "缺少论文标题"}), 400
@@ -296,13 +348,15 @@ def add_favorite():
         clean_title = re.sub(r'[《》\s]', '_', paper_title)
         paper_id = 'title_' + clean_title[:50]
 
-    success = db.add_favorite(session['user_id'], paper_id, paper_title, '', '')
+    success = db.add_favorite(session['user_id'], paper_id, paper_title, authors, year)
     if success:
         return jsonify({
             "success": True,
             "message": "已收藏",
             "paper": {
-                "title": paper_title
+                "title": paper_title,
+                "authors": authors,
+                "year": year,
             }
         })
     else:
@@ -417,16 +471,47 @@ def _parse_conversation_id(value):
         return None
 
 
-def _extract_answer(result):
-    """从 Agent 返回值里取出最后一条助手回复"""
-    msgs = result.get("messages") if isinstance(result, dict) else None
-    if msgs:
-        last = msgs[-1]
-        content = getattr(last, "content", None)
-        if content is None and isinstance(last, dict):
-            content = last.get("content")
-        return str(content) if content else "抱歉，未能获取到回复"
-    return str(getattr(result, "content", result))
+def _papers_from_tool_output(content):
+    """从工具返回的 JSON 字符串里取出结构化论文列表。
+
+    （工具返回 {"papers": [...]}，这里直接解析，前端不再靠正则从
+    Markdown 里猜标题 —— 那样一篇结果只能猜出一篇，也拿不到作者/年份。）
+    """
+    if not isinstance(content, str) or '"papers"' not in content:
+        return []
+    try:
+        data = json.loads(content)
+    except (ValueError, TypeError):
+        return []
+    if isinstance(data, dict) and isinstance(data.get("papers"), list):
+        return [p for p in data["papers"] if isinstance(p, dict)]
+    return []
+
+
+def _pdf_filename(paper):
+    """给下载的 PDF 起一个人能看懂的名字：年份_第一作者_标题.pdf
+
+    那些期刊给的原始文件名是 OJS 生成的编号（`1609-1936-1-PB.pdf`），
+    存下来完全认不出是哪篇，所以这里重命名。
+
+    必须清洗 Windows 不允许的字符（\\ / : * ? " < > |），否则保存会直接失败；
+    标题也截断，避免路径过长。
+    """
+    def safe(text, limit):
+        text = re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", str(text or ""))
+        text = re.sub(r"\s+", " ", text).strip(" ._")
+        return text[:limit]
+
+    title = safe(paper.get("title") or "paper", 80) or "paper"
+    year = safe(paper.get("year"), 8)
+    if year == "未知":
+        year = ""
+    authors = paper.get("authors") or []
+    first_author = safe(authors[0], 16).replace(" ", "") if authors else ""
+
+    parts = [p for p in (year, first_author) if p]
+    parts.append(title)
+    return "_".join(parts) + ".pdf"
 
 
 def _resolve_conversation(user_id, requested_id, question):
@@ -470,6 +555,7 @@ def chat():
     data = request.get_json(force=True, silent=True) or {}
     message = (data.get("message") or "").strip()
     history = data.get("history") or []
+    source_pref = (data.get("source_pref") or "all").strip().lower()
 
     if not message:
         return jsonify({"error": "message is required"}), 400
@@ -480,6 +566,16 @@ def chat():
         content = m.get("content")
         if role in {"user", "assistant", "system"} and isinstance(content, str):
             messages.append({"role": role, "content": content})
+
+    # 前端的"文献来源"开关：以系统消息的形式带进本轮上下文。
+    # 不拼进用户消息里，是因为那样会被模型当成用户说的话，也会污染保存下来的对话记录。
+    if source_pref in ("cn", "en"):
+        scope = "仅中文文献（source='cn'）" if source_pref == "cn" else "仅英文文献（source='en'）"
+        messages.insert(0, {
+            "role": "system",
+            "content": f"用户当前的文献来源偏好是：{scope}。调用 search_papers 时必须使用这个 source 取值。",
+        })
+
     messages.append({"role": "user", "content": message})
 
     user_id = session.get('user_id') if 'user_id' in session else None
@@ -491,29 +587,94 @@ def chat():
         return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
     def generate():
-        import time
-
+        # ── 为什么用"工作线程 + 队列"而不是直接 invoke ──────────────
+        # 原来用 AGENT.invoke()：整段答案生成完才开始切片下发，
+        # 用户要盯着一个空泡泡等十几秒（学术接口还经常要退避重试），
+        # 看起来就像卡死了。改成 astream_events 之后可以：
+        #   1. 一边生成一边吐字（真流式）
+        #   2. 在调用工具时发一个 status 事件，让前端显示"正在检索…"
+        # 但 astream_events 是 async 的，而 Flask 的生成器是同步的，
+        # 所以让它在独立线程里跑，事件经 Queue 交给生成器转成 SSE。
         if conversation_id:
             yield sse_pack({"type": "conversation_id", "conversation_id": conversation_id}).encode("utf-8")
 
-        try:
-            result = AGENT.invoke({"messages": messages})
-        except Exception as e:
-            yield sse_pack({"type": "error", "message": f"{type(e).__name__}: {str(e)[:500]}"}).encode("utf-8")
-            yield sse_pack({"type": "done"}).encode("utf-8")
-            return
+        yield sse_pack({"type": "status", "text": "正在思考…"}).encode("utf-8")
 
-        answer = _extract_answer(result)
-        msgs = result.get("messages") if isinstance(result, dict) else None
+        events = queue.Queue()
+        state = {"tool_used": False, "answer": "", "papers": []}
+
+        async def run_agent():
+            try:
+                async for ev in AGENT.astream_events({"messages": messages}, version="v2"):
+                    kind = ev.get("event")
+
+                    if kind == "on_tool_start":
+                        # 工具调用前模型常会先说一句"我先搜索一下"（还可能是英文），
+                        # 那不是给用户看的答案，丢掉它并切到"检索中"状态
+                        state["tool_used"] = True
+                        state["answer"] = ""
+                        events.put(("status", "正在检索文献源…"))
+
+                    elif kind == "on_tool_end":
+                        output = (ev.get("data") or {}).get("output")
+                        content = getattr(output, "content", None)
+                        if content is None and isinstance(output, str):
+                            content = output
+                        papers = _papers_from_tool_output(content)
+                        if papers:
+                            state["papers"].extend(papers)
+                            events.put(("papers", list(state["papers"])))
+                        events.put(("status", "正在阅读检索结果并生成回答…"))
+
+                    elif kind == "on_chat_model_stream":
+                        chunk = (ev.get("data") or {}).get("chunk")
+                        text = getattr(chunk, "content", None)
+                        if text:
+                            state["answer"] += text
+                            # 有工具调用时，工具之后的内容才是答案，直接边生成边发
+                            if state["tool_used"]:
+                                events.put(("token", text))
+
+                events.put(("done", None))
+            except Exception as e:  # noqa: BLE001 - 异常要送回生成器，不能只留在子线程里
+                events.put(("error", f"{type(e).__name__}: {str(e)[:500]}"))
+
+        threading.Thread(target=lambda: asyncio.run(run_agent()), daemon=True).start()
+
+        # 主线程只做一件事：把队列里的事件转成 SSE。带总超时，避免永久挂住
+        deadline = time.time() + 240
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                yield sse_pack({"type": "error", "message": "检索超时（超过 240 秒），请重试"}).encode("utf-8")
+                break
+            try:
+                kind, value = events.get(timeout=min(remaining, 1.0))
+            except queue.Empty:
+                continue
+
+            if kind == "done":
+                break
+            if kind == "error":
+                yield sse_pack({"type": "error", "message": value}).encode("utf-8")
+                break
+            if kind == "status":
+                yield sse_pack({"type": "status", "text": value}).encode("utf-8")
+            elif kind == "papers":
+                yield sse_pack({"type": "papers", "papers": value}).encode("utf-8")
+            elif kind == "token":
+                yield sse_pack({"type": "token", "token": value}).encode("utf-8")
+
+        answer = state["answer"] or "抱歉，未能获取到回复"
+
+        # 没有调用工具的情况（闲聊类问题）：token 没被实时发出去，这里补发
+        if not state["tool_used"]:
+            for i in range(0, len(answer), 3):
+                yield sse_pack({"type": "token", "token": answer[i:i + 3]}).encode("utf-8")
 
         if user_id:
-            _persist_turn(user_id, conversation_id, message, answer, len(msgs) if msgs else 0)
-
-        chunk_size = 3
-        for i in range(0, len(answer), chunk_size):
-            token = answer[i:i + chunk_size]
-            yield sse_pack({"type": "token", "token": token}).encode("utf-8")
-            time.sleep(0.02)
+            # results_count 记的是"这一轮检索到几篇论文"，不是消息条数
+            _persist_turn(user_id, conversation_id, message, answer, len(state["papers"]))
 
         yield sse_pack({"type": "done"}).encode("utf-8")
 
@@ -527,6 +688,115 @@ def chat():
         generate(),
         headers=headers,
         mimetype="text/event-stream",
+        direct_passthrough=True,
+    )
+
+
+@app.get("/api/sources")
+def list_sources():
+    """当前可用的文献数据源（前端据此显示来源开关的提示）。"""
+    return jsonify({"success": True, "sources": providers.source_status()})
+
+
+@app.get("/api/paper/<path:paper_id>")
+def paper_detail(paper_id):
+    """按论文 id 取详情。
+
+    单独开这个接口而不是让前端再走一轮 LLM：点"详情"只是取数据，
+    不该花一次模型调用，也不该被大模型的幻觉影响。
+    """
+    try:
+        payload = json.loads(providers.get_detail(paper_id))
+    except Exception as e:
+        return jsonify({"success": False, "error": f"{type(e).__name__}: {e}"}), 500
+
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "返回内容无法解析"}), 502
+    if payload.get("error"):
+        return jsonify({"success": False, "error": payload.get("message") or payload["error"],
+                        "retryable": payload.get("retryable", False)}), 502
+    # 成功时 payload 就是论文本身；没找到时是 {"message": ..., "paper": None}
+    # 所以判断依据是"有没有 title"，不能去看有没有 paper 键
+    if not payload.get("title"):
+        return jsonify({"success": False, "error": payload.get("message", "未找到该论文")}), 404
+
+    return jsonify({"success": True, "paper": payload})
+
+
+@app.get("/api/paper/<path:paper_id>/pdf")
+def paper_pdf(paper_id):
+    """把论文的开放获取 PDF 转发下来，并**由我们用可读的文件名**保存。
+
+    为什么要做这个转发：那些期刊的 PDF 直链是 OJS 生成的
+    （`48962-Article Text-60922-1-10-20241217.pdf`），下载到本地完全看不出是哪篇。
+    而浏览器会**忽略跨域链接上的 HTML download 属性**（这是安全限制，改不了），
+    所以只能由同源的我们自己把文件取回来、再设置 Content-Disposition。
+
+    安全上有意收紧：**只使用我们自己数据源里记录的 openAccessPdf**，
+    不接受任何调用方传入的 URL —— 否则这就成了一个可以被拿来抓任意地址的代理。
+    """
+    try:
+        paper = json.loads(providers.get_detail(paper_id))
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": f"获取论文信息失败：{type(e).__name__}"}), 500
+
+    if not isinstance(paper, dict) or paper.get("error"):
+        return jsonify({"error": (paper or {}).get("message", "未找到该论文")}), 404
+    # 成功时 payload 就是论文本身；没找到时是 {"message":..., "paper": None}
+    if not paper.get("title"):
+        return jsonify({"error": paper.get("message", "未找到该论文")}), 404
+
+    url = (paper.get("openAccessPdf") or "").strip()
+    if not url:
+        return jsonify({"error": "该论文没有可下载的全文 PDF 直链，请点「阅读」打开来源页"}), 404
+    if not url.lower().startswith(("http://", "https://")):
+        return jsonify({"error": "全文链接格式无效"}), 400
+
+    filename = _pdf_filename(paper)
+    try:
+        upstream = requests.get(
+            url, stream=True, timeout=(10, 120),
+            headers={"User-Agent": S2_USER_AGENT, "Accept": "application/pdf,*/*"},
+        )
+    except requests.RequestException as e:
+        return jsonify({"error": f"下载失败：{type(e).__name__}，请稍后重试或点「阅读」"}), 502
+
+    if upstream.status_code != 200:
+        code = upstream.status_code
+        upstream.close()
+        return jsonify({"error": f"来源站返回 {code}，请点「阅读」打开原页面"}), 502
+
+    ctype = (upstream.headers.get("Content-Type") or "").lower()
+    if "pdf" not in ctype and "octet-stream" not in ctype:
+        upstream.close()
+        return jsonify({
+            "error": f"这个链接不是 PDF（{ctype or '未知类型'}），请点「阅读」打开原页面",
+        }), 415
+
+    # Content-Disposition 里非 ASCII 文件名要用 RFC 5987 的 filename*，
+    # 同时给一个 ASCII 的 filename 兜底（老浏览器只认前者）
+    disposition = (
+        'attachment; filename="paper.pdf"; '
+        "filename*=UTF-8''" + quote(filename)
+    )
+
+    def stream():
+        try:
+            for chunk in upstream.iter_content(64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    return Response(
+        stream_with_context(stream()),
+        headers={
+            "Content-Type": "application/pdf",
+            "Content-Disposition": disposition,
+            # 给前端/调试看最终用了什么文件名
+            "X-Paper-Filename": quote(filename),
+            "Cache-Control": "no-store",
+        },
         direct_passthrough=True,
     )
 
