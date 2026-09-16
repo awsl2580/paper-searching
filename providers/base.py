@@ -2,7 +2,10 @@
 
 统一论文结构（所有 provider 的 search()/detail() 都必须返回这个形状的 dict）：
 
-    id              带来源前缀的全局唯一 id，形如 "s2:abc123"、"openalex:W123"。
+    id              带来源前缀的全局唯一 id，形如
+                    "semantic_scholar:abc123"、"openalex:W123"。
+                    前缀就是 provider 的 name（见各 provider 的 name 属性），
+                    不是 "s2:" —— 早期文档写成 "s2:" 是错的，split_id 只认 name。
                     收藏、查详情、跨源去重都以它为准；旧数据里不带前缀的裸 id
                     也仍然能被解析（见 split_id）。
     paperId         provider 的原始 id（保留，便于回查原始接口或做引用导出）
@@ -228,7 +231,7 @@ def split_id(paper_id):
     """拆解 id -> (source, raw_id)。
 
     兼容三种历史/新格式：
-        "s2:abc" / "openalex:W1"                         带前缀
+        "semantic_scholar:abc" / "openalex:W1"           带前缀（= provider name）
         "abc123...(40位十六进制)"                        旧的裸 Semantic Scholar id
         "title_xxx"                                     旧的按标题生成的假 id
     识别不出来时返回 (None, 原样)，交给上层按标题检索。
@@ -236,6 +239,12 @@ def split_id(paper_id):
     pid = (paper_id or "").strip()
     if not pid:
         return None, ""
+
+    # "s2:" 是早期文档里写的前缀，虽然全局 id 实际用的是 provider name，
+    # 但用户/老代码很可能照着文档写 "s2:xxx"，所以这里当作别名接受，
+    # 避免它退化成"按标题检索"这种莫名其妙的行为。
+    if pid.startswith("s2:"):
+        return "semantic_scholar", pid[len("s2:"):]
 
     # wanfang 留在列表里是为了向后兼容：万一以后重新接入带授权的中文源，
     # 历史收藏里已经存下的这类 id 仍然能路由回去

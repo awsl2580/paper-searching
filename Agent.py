@@ -104,7 +104,12 @@ def get_paper_detail(paper_id: str) -> str:
 if not os.getenv("DEEPSEEK_API_KEY"):
     raise RuntimeError("DEEPSEEK_API_KEY 未设置。请设置环境变量或在 .env 文件中配置。")
 
-llm = ChatDeepSeek(model="deepseek-chat", temperature=0)
+# 模型名可用 DEEPSEEK_MODEL 覆盖（默认 deepseek-chat，与 Web 版一致）。
+# 说明见 app.py 里 DEEPSEEK_MODEL 的注释：该别名当前由 DeepSeek-V4.1-Flash
+# 承接，且走非思考模式，因此不会有收不到的 reasoning_content。
+DEEPSEEK_MODEL = (os.getenv("DEEPSEEK_MODEL") or "").strip() or "deepseek-chat"
+
+llm = ChatDeepSeek(model=DEEPSEEK_MODEL, temperature=0)
 agent = create_agent(
     model=llm,
     tools=[search_papers, get_paper_detail],

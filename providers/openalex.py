@@ -200,18 +200,34 @@ class OpenAlexProvider(Provider):
     label = "OpenAlex"
     languages = ("en", "zh")
 
-    def search(self, query, limit=5, language=None):
+    def search(self, query, limit=5, language=None, offset=0):
+        """检索。offset 是相对本次查询的偏移，用于翻页。
+
+        OpenAlex 用 page/per_page 分页（page 从 1 开始）。为了对上层暴露
+        统一的 offset 语义，这里自己换算：目标窗口落在第几页就取那一页。
+        per_page 上限 200，所以单次最多能拿 200 条。
+        """
         query = (query or "").strip()
         if not query:
             raise ProviderError("请提供搜索关键词", kind="http_error", source=self.name)
 
-        limit = min(max(1, int(limit or 5)), 50)
-        cache_key = ("search", query.lower(), limit, language or "")
+        limit = min(max(1, int(limit or 5)), 200)
+        offset = max(0, int(offset or 0))
+
+        # OpenAlex 单次 per_page 上限 200。把 per_page 对齐成"本页条数"，
+        # page 就能直接换算 —— offset=10 / limit=10 就是 page=2，只取 10 条，
+        # 不会为了第 2 页把第 1 页也重取一遍。
+        # limit > 200 时才退化成"一大页里切片"（per_page 封顶 200，
+        # page 按 200 一档算），这时返回的窗口必然覆盖 [offset, offset+limit)。
+        per_page = min(200, limit)
+        page = (offset // per_page) + 1
+
+        cache_key = ("search", query.lower(), per_page, page, language or "")
         cached = client.cache_get(cache_key)
         if cached is not None:
             return cached
 
-        params = {"search": query, "per_page": limit}
+        params = {"search": query, "per_page": per_page, "page": page}
         if OPENALEX_MAILTO:
             params["mailto"] = OPENALEX_MAILTO
         # language="zh" 时只要中文文献；不传则不过滤（英文库里本身就是英文为主）
@@ -232,6 +248,9 @@ class OpenAlexProvider(Provider):
             )
 
         papers = [normalize_openalex_paper(w) for w in (data.get("results") or [])]
+        # 这一页里真正落在请求窗口内的部分
+        start = offset - (page - 1) * per_page
+        papers = papers[start:start + limit]
         client.cache_set(cache_key, papers)
         return papers
 

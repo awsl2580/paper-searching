@@ -133,20 +133,51 @@ class SemanticScholarProvider(Provider):
     languages = ("en",)
     supports_title_match = True
 
-    def search(self, query, limit=5, language=None):
+    def search(self, query, limit=5, language=None, offset=0):
+        """检索。offset 用于翻页。
+
+        /paper/search 单次 limit 上限 10、offset+limit 上限 1000，所以这里
+        自己按 10 条一页拼够需要的条数（每页各有自己的缓存，翻页时基本都命中）。
+        """
         query = (query or "").strip()
         if not query:
             raise ProviderError("请提供搜索关键词", kind="http_error", source=self.name)
 
-        limit = min(max(1, int(limit or 5)), 10)
-        cache_key = ("search", query.lower(), limit)
+        limit = min(max(1, int(limit or 5)), 100)
+        offset = max(0, int(offset or 0))
+
+        S2_PAGE = 10
+        S2_MAX_OFFSET = 1000
+        out, skipped = [], offset
+        while len(out) < limit:
+            if skipped >= S2_MAX_OFFSET:
+                break                      # 这个端点翻不了更远，如实截断
+            want = min(S2_PAGE, limit - len(out), S2_MAX_OFFSET - skipped)
+            page = self._search_page(query, want, skipped)
+            if page is None:               # 被限流
+                if out:
+                    break                  # 已经有一部分了，就先用着
+                raise ProviderError(
+                    rate_limit_message(), kind="rate_limited", retryable=True, source=self.name,
+                )
+            if not page:
+                break                      # 没有更多
+            out.extend(page)
+            skipped += len(page)
+            if len(page) < want:
+                break                      # 服务端已到底
+        return out
+
+    def _search_page(self, query, limit, offset):
+        """取一页（带缓存）。返回 list；被限流返回 None。"""
+        cache_key = ("search", query.lower(), limit, offset)
         cached = client.cache_get(cache_key)
         if cached is not None:
             return cached
 
         status, data = client.get(
             "/paper/search",
-            params={"query": query, "limit": limit, "fields": SEARCH_FIELDS},
+            params={"query": query, "limit": limit, "offset": offset, "fields": SEARCH_FIELDS},
         )
 
         papers = None
@@ -169,17 +200,15 @@ class SemanticScholarProvider(Provider):
                 kind="http_error", source=self.name, status=status,
             )
 
-        # 相关性检索被限流或没结果时，用 bulk 端点兜底
-        if (throttled or papers == []) and S2_BULK_FALLBACK:
-            bulk = _bulk_search(query, limit)
-            if bulk:
-                papers = bulk
-                throttled = False
-
-        if throttled and not papers:
-            raise ProviderError(
-                rate_limit_message(), kind="rate_limited", retryable=True, source=self.name,
-            )
+        if throttled:
+            # 相关性检索被限流时用 bulk 端点兜底（两者限流额度独立）。
+            # bulk 不支持 offset，所以只有第一页能兜底；翻后续页时返回 None。
+            if S2_BULK_FALLBACK and offset == 0:
+                bulk = _bulk_search(query, limit)
+                if bulk:
+                    client.cache_set(cache_key, bulk)
+                    return bulk
+            return None
 
         papers = papers or []
         client.cache_set(cache_key, papers)

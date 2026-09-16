@@ -14,6 +14,16 @@ build/
 .vscode/
 .idea/
 
+# 数据库：绝不能提交
+# literature.db 是二进制 SQLite 文件，git 会按文本处理并把它转成 UTF-16，
+# 仓库里那份已经损坏（header 变成 FF FE 53 00，即 "SQLi..." 的 UTF-16 编码，
+# sqlite 打开报 "file is not a database"，且无法完整还原）。
+# 而且它装着用户的 bcrypt 密码哈希、收藏和对话记录，本来也不该进版本库。
+literature.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # OS
 .DS_Store
 Thumbs.db

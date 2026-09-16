@@ -1,11 +1,19 @@
 """数据库操作模块 - 用户系统和搜索历史"""
 
+import os
 import sqlite3
 import bcrypt
 from datetime import datetime
 import json
 
-DB_PATH = "literature.db"
+# 数据库固定放在本文件旁边，不用相对路径。
+#
+# 原因：原来写的是 DB_PATH = "literature.db"，而 sqlite3.connect 会相对**当前工作目录**
+# 解析，于是"数据库在哪儿"取决于从哪个目录启动。实测已经踩到：从 AIagent2\ 启动过
+# 一次，就在那儿留下了一个 0 行的 literature.db，而真正的库在 AIagent2\AIagent1\ 下
+# ——用户看到的现象是"我的收藏和历史都没了"。
+# 用 __file__ 锚定后，无论从哪个目录启动都指向同一个库。
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "literature.db")
 
 
 def get_db():
