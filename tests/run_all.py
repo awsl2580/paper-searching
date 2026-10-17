@@ -36,6 +36,7 @@ PY_TESTS = [
     ("公网暴露前安全检查（源码不外泄/密钥/口令门禁）", "test_exposure.py"),
     ("图片与 PDF 附件（校验/渲染/多模态装载/不落盘）", "test_attachments.py"),
     ("账号持久化（注册一次，以后直接登录）", "test_accounts.py"),
+    ("环境变量加载（.env → .env.local 覆盖）", "test_env_config.py"),
 ]
 JS_TESTS = [
     ("前端参考文献作者格式（与后端规则一致）", "test_frontend_authors.js"),

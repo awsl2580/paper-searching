@@ -345,29 +345,33 @@ AIagent1/
 
 ## 快速开始
 
-### 1. 配置
+### 1. 配置（clone 下来通常不用动）
 
-复制 `.env.example` 为 `.env`，填入两个必填项：
+本仓库是**私有**的，`.env` 已经随仓库提交（团队共用的开发配置），
+里面 `DEEPSEEK_API_KEY` 和 `FLASK_SECRET_KEY` 都是配好的，**拉下来直接就能跑**，
+不需要再找人要 key。
 
-```bash
-cp .env.example .env
-```
+`FLASK_SECRET_KEY` 是登录态的签名密钥：**随机生成一次、之后不要改**，
+改了所有人的登录态会立即失效（需要重新登录）。
+
+需要**自己的**配置时（用自己的 key 测额度、临时改超时、本地开口令等），
+别改 `.env`（会污染别人的共用配置），新建 `.env.local` 即可 ——
+它已在 `.gitignore` 里，只覆盖你写的那几项：
 
 ```ini
-DEEPSEEK_API_KEY=sk-你的密钥
-
-# 会话签名密钥：随机生成一次，之后**不要改**（改了所有人的登录态立即失效）
-FLASK_SECRET_KEY=...
+# .env.local
+DEEPSEEK_API_KEY=sk-我自己的key
+API_TIMEOUT=60
 ```
 
-`FLASK_SECRET_KEY` 用这行生成，粘进 `.env` 即可：
+加载顺序：`.env` → `.env.local`（后者覆盖前者，见 `app.py` 顶部）。
+这条机制有专门的用例守着：`tests/test_env_config.py`。
 
-```bash
-python -c "import secrets; print(secrets.token_hex(32))"
-```
+`.env.example` 改成**纯文档**性质：列出全部可配置项及其含义，供查阅。
 
-缺了它会直接拒绝启动（报 `RuntimeError: FLASK_SECRET_KEY 未设置`）——
-这是刻意的：登录态就是一枚用它签名的 cookie，密钥可猜等于任何人都能伪造登录。
+> ⚠️ 以上做法成立的前提是**仓库保持 Private**。
+> 一旦转为公开，`.env` 里的两个密钥必须立即轮换 ——
+> 而且光删文件不够，它们会留在 git 历史里。
 
 ### 2. 启动
 
@@ -570,9 +574,15 @@ OpenAlex 的 `best_oa_location.pdf_url` 命中率不错（实测中文 OA 期刊
 | `OPENALEX_CACHE_TTL` | 否 | OpenAlex 缓存秒数，默认 1800 |
 | `HTTPS_PROXY` | 否 | 代理地址（国内网络不佳时使用） |
 | `API_TIMEOUT` | 否 | API 超时秒数，默认 30 |
-| `FLASK_SECRET_KEY` | 否 | Flask session 密钥，公网部署务必设置随机值 |
+| `FLASK_SECRET_KEY` | 是 | Flask session 密钥；缺了会拒绝启动。已随 `.env` 提交，**生成一次后不要改** |
 
-参考 `.env.example` 进行配置。**切勿将真实 API Key 提交到版本库。**
+配置来源三层，后面的覆盖前面的：**`.env` → `.env.local` → 系统环境变量**。
+`.env` 已进库（团队共用），`.env.local` 不进库（个人覆盖），
+各变量含义详见 `.env.example`。
+
+> ⚠️ `.env` 能进库的前提是**仓库私有**。若仓库转为公开，
+> 立即轮换 `DEEPSEEK_API_KEY` 与 `FLASK_SECRET_KEY`；
+> 仅删文件无效，密钥会留在 git 历史里。
 
 ## 关于检索限流（429）
 
