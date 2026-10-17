@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "updated_at": "2026-10-17T20:09:52",
+  "note": "由 database.export_accounts() 自动生成；password 是 bcrypt 哈希，不是明文。删掉本文件不影响已存在的 literature.db，但换目录/换机器时就找不回账号了。",
+  "accounts": [
+    {
+      "username": "su1",
+      "password": "$2b$12$y059G3z/Jic7ILsjFT.hs.SRL5BEGffwnW5eLFB5zc83p2wIDHc1O",
+      "email": "",
+      "created_at": "2026-06-16 09:05:38"
+    },
+    {
+      "username": "JeremyLin",
+      "password": "$2b$12$xWty6DpIqK11ScblR0s.c.9pISa7cW.0WNtktQJXDgi0YYQE8S.lu",
+      "email": "",
+      "created_at": "2026-09-14 04:52:20"
+    },
+    {
+      "username": "TohsakaRin",
+      "password": "$2b$12$LQabU8Xc3rwOvZ9E3Qe61edaQw0vB3RSY4JcW9FObRGfSsj0xS9ia",
+      "email": "",
+      "created_at": "2026-09-14 04:57:23"
+    },
+    {
+      "username": "123",
+      "password": "$2b$12$cy7STCNDbx4gTXqETuf.d.SQtwnGp7xeWURyo5EGSMypWHuQGRzd.",
+      "email": "",
+      "created_at": "2026-09-14 06:32:17"
+    },
+    {
+      "username": "httpuser1",
+      "password": "$2b$12$MfpTtchkKreqzvu0dV3Cw.WnGnu6sJIFkxZ5ClMeJtxMvNb2QgnAC",
+      "email": "",
+      "created_at": "2026-09-19 14:15:12"
+    }
+  ]
+}

@@ -8,7 +8,20 @@ import sys
 import subprocess
 import json
 import re
+import queue
+import asyncio
+import threading
+import time
 from urllib.parse import quote
+
+# 先统一输出编码：Windows 控制台/重定向默认是 GBK，下面这些带 emoji 的
+# 提示（依赖安装、启动横幅、数据库就绪）会抛 UnicodeEncodeError 把启动流程打断。
+# 放在**导入阶段**而不是 __main__ 里，是因为 app 在导入时就会建表并打印。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # ── 自动检查并安装依赖 ────────────────────────────────────
 REQUIRED_PACKAGES = {
@@ -43,37 +56,35 @@ if missing:
 
 # ── 第三方导入 ────────────────────────────────────────────
 import requests
-from flask import Flask, Response, jsonify, request, session, stream_with_context, send_from_directory
+from flask import Flask, Response, jsonify, redirect, request, session, stream_with_context, send_from_directory
 from functools import wraps
 
+from langchain.agents import create_agent
 from langchain_deepseek import ChatDeepSeek
+from langchain_core.tools import tool
 
 # 自动加载 .env（如果存在）
+#
+# 这里**必须用绝对路径**，不能用裸 load_dotenv()：
+# 裸调用是按"当前工作目录"向上找 .env 的，从别处执行
+# （例如 python C:\...\AIagent2\AIagent1\app.py，或在 IDE 里配了别的工作目录）
+# 就会找不到，于是 API Key 缺失、会话密钥回退到公开的默认值 —— 而且不报错。
+# 这个坑是接公网域名时踩出来的：换个目录启动，签名密钥就悄悄变了。
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 except Exception:
     pass
 
 TIMEOUT = int(os.getenv("API_TIMEOUT", "30"))
 S2_USER_AGENT = os.getenv("S2_USER_AGENT", "LiteratureSearchAssistant/1.0 (personal research tool)")
 
-# ── 对话模型 ───────────────────────────────────────────────
-# 默认 "deepseek-chat" 是 DeepSeek 的稳定别名，不是固定到某一代模型：
-# 实测 2026-09 它由 DeepSeek-V4.1-Flash 承接（/models 只返回
-# deepseek-flash 与 deepseek-v4-pro 两个正式名）。
-#
-# 为什么默认用这个别名而不是直接写 "deepseek-flash"：
-# 这个别名走的恰好是**非思考模式**（实测 reasoning_content 为空），
-# 而 V4.1-Flash 默认开思考、会产生 reasoning_content。本项目只在 /api/search
-# 里做一次"查询理解"，只读 content；开思考的话推理内容拿不到、只是白等
-# 并多付推理 token 的钱，对"提取关键词"这种任务毫无收益。
-#
-# 想换模型只改 .env 里的 DEEPSEEK_MODEL，不用动代码：
-#   deepseek-v4-pro        能力更强，贵约 3~5 倍，不支持 vision
-#   deepseek-flash         正式名，会开思考（需另行处理推理内容）
-#   deepseek-reasoner      旧 R1 别名，实测同样由 V4.1-Flash 承接且支持工具调用
-DEEPSEEK_MODEL = (os.getenv("DEEPSEEK_MODEL") or "").strip() or "deepseek-chat"
+# 模型名统一从这里取（README「模型说明」里承诺的"改 .env 不用改代码"）。
+# 当前用 deepseek-flash（DeepSeek-V4.1-Flash）。它**默认开思考**，
+# 会先吐一大段 reasoning_content 再写正文，所以下面 on_chat_model_stream
+# 那段专门处理了推理内容：推「模型正在思考…」状态给前端，
+# 否则思考期间界面就是个空白泡泡（实测能长达 20 秒以上）。
+DEEPSEEK_MODEL = (os.getenv("DEEPSEEK_MODEL") or "").strip() or "deepseek-flash"
 
 # 导入数据库模块
 import database as db
@@ -83,14 +94,118 @@ import database as db
 # 那会把整个 static/ 目录挂到根路径的通配路由 /<path:filename> 上——
 # 目录里放什么就能下载什么。实测当时 static/app.py（一份 561 行的旧服务端
 # 副本）可以直接 GET /app.py 拿到 200 + 21715 字节源码，app.js / styles.css
-# 同理。这几个文件已经删掉，但根因是"整目录托管"这个配置本身：
-# 以后任何人往里丢一个 .py / .bak / .sql，都会立刻变成公开可下载的文件。
+# 同理。根因是"整目录托管"这个配置本身：以后任何人往里丢一个 .py / .bak / .sql，
+# 都会立刻变成公开可下载的文件。
 #
-# 现在改成只服务前端真正需要的 index.html（前端是单文件，内联 CSS/JS，
-# 不引用任何外部资源），其余一律 404。
-STATIC_FILES = {"index.html"}
+# 前端是单文件应用（内联 CSS/JS，不引用任何外部资源），所以这里只放行
+# 真正需要的文件。新增静态资源记得加进来，否则会被 404。
+STATIC_FILES = {"index.html", "favicon-paper.svg", "logo-paper.svg"}
 app = Flask(__name__, static_folder=None)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "your-secret-key-change-this-in-production")
+
+# ── 会话密钥：必须有，且不能是那个公开的兜底值 ─────────────
+# 为什么这次改成"缺失就拒绝启动"：本站要挂到公网域名上。
+# Flask 的登录态就是一枚用 secret_key 签名的 cookie，签名密钥一旦可猜，
+# 任何人都能自己签一个 {"user_id": 1} 冒充别人登录 —— 别人的对话记录、
+# 收藏就都能读。而原来的兜底值 "your-secret-key-change-this-in-production"
+# 写在开源代码里，等于公开密钥。
+#
+# 本地跑不受影响：.env 里已经生成了一个随机值（见 .env.example 的说明）。
+_SECRET_DEFAULT = "your-secret-key-change-this-in-production"
+_secret = (os.getenv("FLASK_SECRET_KEY") or "").strip()
+if not _secret or _secret == _SECRET_DEFAULT:
+    raise RuntimeError(
+        "FLASK_SECRET_KEY 未设置（或仍是示例里的默认值）。\n"
+        "本站的登录态由它签名，用默认值等于任何人都能伪造登录。\n"
+        "请在 .env 里设置一个随机值，例如：\n"
+        "  python -c \"import secrets; print('FLASK_SECRET_KEY=' + secrets.token_hex(32))\"\n"
+        "把输出那行加进 .env 即可。"
+    )
+app.secret_key = _secret
+
+# ── 反向代理（natapp / ngrok 这类内网穿透）────────────────
+# 穿透工具在中间做了一层代理：浏览器访问的是 https://xxx.natappfree.cc，
+# 但它转发到本地是 http。不加这一层的话 Flask 以为自己是 http，
+# 生成绝对 URL、判断 is_secure 都会出错（安全 cookie 就发不出去）。
+# x_proto=1 表示只信一层代理的 X-Forwarded-Proto。
+from werkzeug.middleware.proxy_fix import ProxyFix  # noqa: E402
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1, x_for=1)
+
+# ── 公网访问口令（可选，设了才生效）─────────────────────
+# 为什么需要：本站在公网暴露的是**共享的 DeepSeek 额度**，
+# 随手转发的链接就可能被爬虫或陌生人刷掉费用。
+# 不设 PUBLIC_PASSWORD 就完全开放（本地开发/评委直连都方便）；
+# 设了之后所有页面和接口都要求先过这一关。
+PUBLIC_PASSWORD = (os.getenv("PUBLIC_PASSWORD") or "").strip()
+
+# 放行清单：口令页本身、健康检查、站点图标。其余一律先过口令。
+_GATE_EXEMPT = {"/gate", "/api/health", "/favicon-paper.svg", "/logo-paper.svg"}
+
+_GATE_PAGE = """<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>学术检索 · AI 助手</title>
+<style>
+ body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+      background:#f0f4f8;font-family:'Segoe UI','PingFang SC',Roboto,sans-serif}
+ .box{background:#fff;border-radius:20px;padding:32px 28px;width:340px;
+      box-shadow:0 16px 44px rgba(20,40,90,.14);text-align:center}
+ h1{font-size:17px;color:#1a2a6c;margin:0 0 6px}
+ p{font-size:13px;color:#8892a4;margin:0 0 18px;line-height:1.7}
+ input{width:100%;box-sizing:border-box;padding:11px 14px;border:1px solid #dde1e8;
+       border-radius:10px;font-size:14px;font-family:inherit;outline:none}
+ input:focus{border-color:#4f7df3}
+ button{width:100%;margin-top:12px;padding:11px;border:none;border-radius:10px;
+        background:linear-gradient(135deg,#1a2a6c,#2d4373);color:#fff;font-size:14px;
+        cursor:pointer;font-family:inherit}
+ .err{margin-top:10px;font-size:12.5px;color:#c0392b;min-height:16px}
+</style></head><body>
+<div class="box">
+  <h1>📚 学术检索 · AI 助手</h1>
+  <p>本站部署在公网，请先输入访问口令</p>
+  <form method="post" action="/gate">
+    <input type="password" name="password" placeholder="访问口令" autofocus autocomplete="current-password">
+    <button type="submit">进入</button>
+  </form>
+  <div class="err">__ERROR__</div>
+</div></body></html>"""
+
+
+@app.before_request
+def _public_access_gate():
+    """设了 PUBLIC_PASSWORD 才生效的门禁。
+
+    用 cookie 里的一个签名标记记住"已通过"，而不是每次请求都带口令。
+    标记内容就是 'ok'，靠 Flask 的会话签名保证不可伪造
+    （所以上面那条"必须设置 FLASK_SECRET_KEY"是这套东西的前提）。
+
+    实现上有个坑：POST /gate 必须由**路由**处理，不能在这里返回重定向 ——
+    原来把表单提交也写在这个钩子里，而 Flask 在 before_request 返回非 None 之后
+    仍会按 URL 规则匹配路由，/gate 只声明了 GET，于是 POST 变成 405。
+    所以这里只负责"放行判断"，口令校验交给下面的 /gate 路由。
+    """
+    if not PUBLIC_PASSWORD:
+        return None
+    if request.path in _GATE_EXEMPT:
+        return None
+    if session.get("gate_ok"):
+        return None
+    return _GATE_PAGE.replace("__ERROR__", ""), 401
+
+
+@app.route("/gate", methods=["GET", "POST"])
+def gate():
+    """口令页：GET 显示表单，POST 校验口令。"""
+    if not PUBLIC_PASSWORD:
+        return redirect("/")
+    if request.method == "POST":
+        # 直接比较口令。这里不做常数时间比较 ——
+        # 这是一个共享口令而不是每人一个密码，收益极低。
+        if (request.form.get("password") or "") == PUBLIC_PASSWORD:
+            session["gate_ok"] = True
+            session.permanent = True      # 口令也只问一次，30 天内别再烦用户
+            return redirect("/")
+        return _GATE_PAGE.replace("__ERROR__", "口令不正确"), 401
+    return redirect("/")
 
 # ── 登录验证装饰器 ────────────────────────────────────────
 def login_required(f):
@@ -102,6 +217,27 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+
+# ── 登录态记忆时长 ────────────────────────────────────────
+# 需求："不用每次运行项目都重新登录"。
+# Flask 的会话 cookie 默认是**会话 cookie**，浏览器一关就没了；
+# 这里改成持久 cookie（30 天），只要 FLASK_SECRET_KEY 不变，
+# 重启服务后浏览器里的登录态依然有效。
+from datetime import timedelta  # noqa: E402
+
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
+
+
+# ── 启动即建表 ────────────────────────────────────────────
+# 以前只在 `if __name__ == "__main__"` 里调 db.init_db()，
+# 用 `flask run` / gunicorn 之类方式启动就没有 users 表，注册直接 500。
+# 这里在导入时补一次（CREATE TABLE IF NOT EXISTS，幂等）。
+# 账号备份 accounts.json 也会在 init_db 里自动合并进来。
+try:
+    db.init_db()
+except Exception as _db_exc:      # 数据库目录不可写也不能让整个站起不来
+    print(f"数据库初始化失败（登录/收藏会不可用）：{_db_exc}")
+
 # ── 文献数据源：多源聚合层 ────────────────────────────────
 # 数据源不是单一的 Semantic Scholar，而是 providers/ 下的多源聚合：
 #   semantic_scholar  英文，免费公共配额（高峰期会限流）
@@ -109,336 +245,187 @@ def login_required(f):
 # 节流 / 指数退避 / 缓存 / 跨源去重都在 providers 里，CLI 版 Agent.py 共用同一份。
 # 换源或加源只需要新增 providers/xxx.py 并在注册表里加一行，本文件不用动。
 import providers
+import workflow as wf
+import attachments
 
 
-# ── 检索意图理解 ──────────────────────────────────────────
-# 界面是搜索框而不是对话框，所以这里不需要 Agent 的工具循环：
-# 只需要一次模型调用，把自然语言查询变成"关键词 + 检索范围"，
-# 然后直接交给 providers 去检索。比原来跑 Agent 快得多，也便宜得多。
-#
-# 注意：模型只负责理解意图，**不参与渲染**。结果列表里的标题、作者、
-# 年份、被引、链接全部来自 providers 的结构化数据，模型碰不到，
-# 所以不存在"编造一篇不存在的论文"的问题。
-EXTRACT_PROMPT = """你是学术检索的查询理解模块。把用户输入转成检索参数，只输出 JSON。
+DEFAULT_SYSTEM_PROMPT = """你是一个专业的学术文献检索助手。你的任务是帮助用户查找和了解学术论文。
 
-输出字段：
-- "query"：真正用于检索的关键词。中文主题用中文，英文主题用英文；
-  去掉"帮我找""我想看""有没有"这类口语词；保留专业术语和限定词
-  （例如年份、方法名、综述/review）。如果用户输入本身就是关键词，原样返回。
-- "source"："all" | "cn" | "en"。用户明确说"中文文献/国内研究"给 "cn"，
-  说"英文文献/外文/SCI"给 "en"，否则一律 "all"。
-- "limit"：想要的条数，1-10 之间的整数，没提就给 10。
-- "note"：一句话说明你怎么理解这次检索（给用户看的中文短句，20 字以内）。
-  例如"按关键词检索：图神经网络 综述"。
-- "plan"：一句话说明你的检索策略（给用户看，25 字以内）。
-  例如"先按主题词检索，兼顾中英文来源"或"用户要综述，优先找 review 类文献"。
+你的检索结果来自多个数据源（Semantic Scholar、OpenAlex），
+每条结果里都有 sourceLabel 字段标明来源，language 字段标明语种（en/zh）。
 
-只输出 JSON，不要任何解释文字或 markdown 代码块。"""
+你可以使用以下工具：
+- search_papers：搜索学术论文，返回论文列表（含标题、作者、年份、摘要概要、来源、链接）
+- get_paper_detail：按论文 id（或标题）获取详细信息（含完整摘要、引用数、发表期刊等）
 
-# 智能体"反思后重规划"用的提示词：上一轮结果不合格时，换一个策略
-REPLAN_PROMPT = """你是学术检索智能体。上一轮检索的结果不理想，请换一个检索策略重试。
+使用规则：
+1. 当用户询问某个领域或主题的论文时，先用 search_papers 搜索
+2. search_papers 的 source 参数控制检索范围：
+   - "all" 中文 + 英文（默认）
+   - "cn" 仅中文文献（用户说"中文文献""国内研究"时用）
+   - "en" 仅英文文献（用户说"英文文献""外文"时用）
+3. 【最重要】检索结果会由界面自动渲染成"论文卡片"显示在回答下方，
+   卡片里已经包含作者、年份、期刊、被引次数、摘要、来源标签、
+   原文链接、PDF 链接，以及「收藏」「详情」按钮。
+   所以你的正文**绝对不要重复这些字段**，只写两部分：
 
-你会收到：上一轮的检索词、检索范围、失败原因、以及已经拿到的部分标题。
-要求：
-- 换一个**不同角度**的表达，不要只是把原词删掉一两个词。
-  可用的策略：改用同义术语或英文对应词、去掉过窄的限定词只留核心概念、
-  换成更通用的上位概念、补充该领域公认的方法名。
-- 如果失败原因是"跑题"，说明原词太宽泛或字面匹配到了无关领域，
-  应该换成更精确的术语。
-- 如果失败原因是"结果太少"，说明原词太窄，应该放宽。
+   (a) 开头一句话概括：主题、共几篇，必要时点出覆盖的方向或年份跨度；
+   (b) 一个「编号. 标题」的清单，每条只占一行。
 
-输出 JSON：
-- "query"：新的检索词，必须和上一轮不同
-- "source"："all" | "cn" | "en"，拿不准就保持原来的
-- "thought"：一句话说明为什么这样改（给用户看，35 字以内）
+   正文里不要写作者、期刊、摘要、被引次数、链接、来源标注。
+   这份清单必须保留，因为用户下一轮会说"看第 2 篇的详细信息"，
+   而对话上下文里只有你的正文，没有卡片数据。
 
-只输出 JSON。"""
+   反例（不要这样写——这些信息卡片里全都有，写一遍就是重复）：
+     "1. 乡村振兴背景下货币政策… 作者：唐文婷｜2022｜摘要：利用向量自回归模型…
+      链接：https://doi.org/10.xxxx"
+   正例：
+     "1. 乡村振兴背景下货币政策的农业产业发展效应探究"
+4. 当用户说"看第X篇的详细信息"时，把该篇的 id 字段原样传给 get_paper_detail。
+   这种情况下没有卡片，你可以把完整摘要、引用数、期刊、链接都写清楚。
+5. 只有在用户**明确索要链接**时，才在正文里写出 URL。这时要分清楚两个字段：
+   - url = 网页地址（来源页 / DOI 页），点开是普通网页，能直接在浏览器里浏览
+   - openAccessPdf = 完整论文的 PDF 直链；有些期刊点开会**直接下载文件**
+   用户说"只是想看看 / 浏览一下"时给 url；明确说"要全文 / 要 PDF"时给 openAccessPdf。
+   两个都照抄，**绝对不要自己拼造、改写或猜测 URL**（尤其是 DOI）；
+   字段为空就如实说明"该源未提供"，不要编一个出来
+6. 如果结果是 {"error": "rate_limited", ...}，说明数据源被限流了（这不是故障）：
+   - 直接把 message 和 suggestion 里的内容转述给用户，不要自己编造"服务不可用"之类的结论
+   - 可以再调用一次 search_papers 重试（相同检索会命中本地缓存，重试成本很低）
+   - 不要连续反复重试同一个查询超过两次
+7. 如果结果里的 warnings 字段非空（某个源本次检索失败、结果不完整），
+   只用半句话在末尾带过，例如"（Semantic Scholar 本次被限流，以上为 OpenAlex 来源）"。
+   不要单独写一段数据源状态说明，更不要把"未配置/未启用"这类部署信息讲给用户听。
+8. 回复时请用中文，保持专业且友好的学术交流风格
+9. 不要编造检索结果里没有的论文、作者、引用数或链接
+10. 界面会自动把检索结果汇总成"精读文献表"（含相关度打分、可导出 CSV），
+    并支持一键生成 GB/T 7714 / APA / BibTeX 三种参考文献格式。
+    所以：用户要参考文献格式时，不必手工排版，告诉他去「📊 文献表」面板切换格式即可；
+    用户嫌结果太杂/要"高相关的"时，用 search_papers 的 min_relevance 参数（给 40-60）收紧，
+    不要自己在正文里人工剔除。
+11. 如果用户要的是**成篇的东西**——"帮我写篇综述""做个文献调研/研究现状""整理一份
+    带参考文献的报告""系统梳理一下这个方向的进展"——不要自己一段段写，
+    也不要连续调用十几次 search_papers 硬凑。改用 start_research_workflow：
+    它会自动跑完 检索筛选 → 信息抽取 → 综述生成 → 统计可视化 → 参考文献格式化，
+    产出带 GB/T 7714 参考文献的完整报告，而且中途可中断、可从断点续跑。
+    调用后告诉用户"已规划好研究方案，点按钮开始执行"，
+    并简单说一下你规划出的检索重点，不要假装报告已经写好了。
+12. **绝对不要把工具的返回内容原样复制到正文里**。工具返回的是给你自己看的
+    结构化数据（JSON）或执行回执，用户不需要、也看不懂。
+    实测踩过的坑：start_research_workflow 返回 JSON 时，正文里直接出现了
+    `{"topic": "...", "query": "...", "sections": [...]}` 这样一坨。
+    无论工具返回什么格式，你都要用自己的话**转述**成中文：
+    "已规划好方案，检索式是 X，重点看 Y，执行流程是 …"。
+    正文里出现 `{` `}` `"key":` 这类结构化痕迹，就是错的。
+13. 用户可能随消息附上图片（论文截图、参考文献页、拍摄的实验照片、
+    图表、论文 PDF 转成的页面）。这些图片**你自己能看**（多模态），
+    按下面两种情形处理，**不要**回答"我无法查看图片"：
 
-# 智能体"归纳"用的提示词：读懂检索结果，给出要点与后续方向
-SYNTHESIS_PROMPT = """你是学术检索智能体。用户提了一个需求，系统检索到了一批文献，
-请你读懂这批结果，给用户一个有用的导读。
+    (a) **图里有论文/文献信息**（标题、作者、期刊、DOI、参考文献列表）：
+        先读图取出题录信息，再**立刻调用 search_papers 去检索**，
+        把图里的论文真正找出来给用户。
+        * 检索时分两次调用效果最好（实测模型自己就是这么做的）：
+          一次用"标题 + 作者 + 关键词"的英文/中文组合，一次用 DOI 原样检索；
+        * 图上没有 DOI 就只用标题+作者，不要编一个 DOI 出来；
+        * 若图里是**多篇**文献的列表，逐个检索太慢时，挑最相关的几篇先检索，
+          并说明"图中共 N 篇，已为你检索前几篇"。
+    (b) **图是实验照片、现象、示意图、图表**（没有题录信息）：
+        先客观描述你看到了什么（对象、条件、趋势、异常），
+        再据此归纳出 3-5 个**学术检索关键词**，然后调用 search_papers，
+        帮用户找到与这个现象相关的已有研究。
+        * 描述要基于图上真实可见的内容，**看不清的地方明说"无法辨认"**，
+          不要猜测或补全不存在的细节；
+        * 表格/曲线图里的具体数值容易看错，只讲趋势和量级，
+          不要给出精确读数后就当成事实（可以说"图中显示随 X 增大而上升"）。
 
-严格约束（必须遵守）：
-1. **只能依据下面给出的文献**。不要引入列表之外的论文、作者、年份或引用数。
-2. 不要编造任何数字。列表里没有的信息就说"文献未提供"。
-3. 如果结果与用户需求不太匹配，要**如实说明**，不要硬凑。
-4. 中文回答。
-
-输出 JSON：
-- "summary"：2-4 句话的导读。说清楚这批文献大致覆盖什么方向、
-  彼此是什么关系（同一路线 / 不同方法 / 综述与实证之分）、
-  有没有明显的空白或分歧。不要逐条复述标题。
-- "highlights"：最多 3 条要点，每条一句话。
-  可以用"第1篇…"指代，但不要只复述标题 —— 要说出它的特点
-  （例如"第2篇是综述，适合先建立整体认识"）。
-- "followups"：最多 3 条**用户可能想接着搜的方向**，每条是一个可以直接拿去检索的
-  短语（中英文按主题定），不要是问句。例如"图神经网络 可解释性"。
-- "caveat"：一句话说明这批结果的局限（例如"中文文献覆盖有限，建议同时看英文"）。
-  没有明显局限就给空字符串。
-
-只输出 JSON。"""
+    涉及图片时，正文开头先用一句话说明你从图里读到了什么
+    （例如"我识别到这篇论文是《X》，作者 Y"），让用户能校验你的识别是否准确。
+    识别不确定时明确说明不确定。
+14. 如果用户附了图但**什么都没说**，按 (a)/(b) 自行判断属于哪种情形并直接开始工作，
+    不要反问"你想让我做什么"。"""
 
 
-def _extract_search_params(message):
-    """把用户的自然语言查询解析成检索参数（智能体的"规划"步骤）。
+@tool
+def search_papers(query: str, limit: int = 5, source: str = "all", min_relevance: int = 0) -> str:
+    """搜索学术论文。
 
-    模型不可用或返回不合法 JSON 时，退化成"原样当关键词检索"——
-    搜索框必须始终能用，不能因为一次模型调用失败就搜不了。
+    参数:
+        query: 搜索关键词（中文主题用中文，英文主题用英文）
+        limit: 返回数量（默认5，最多10）
+        source: 检索范围，'all'=中英文全部(默认)、'cn'=仅中文文献、'en'=仅英文文献
+        min_relevance: 相关度下限 0-100。默认 0（只剔除查询词完全没命中的）。
+                       用户要求"高相关""严格筛选""精读文献表"时给 40-60。
+
+    返回的每篇论文里：
+        relevance      相关度分（0-100，标题命中权重更高）
+        openAccessPdf  全文 PDF 直链（能读到完整论文）
+        url            来源页/DOI 页（付费论文只有摘要页）
+        volume/issue/pages  卷期页码（生成参考文献格式要用）
     """
-    fallback = {
-        "query": (message or "").strip(),
-        "source": "all",
-        "limit": 10,
-        "note": "按关键词检索：" + (message or "").strip()[:20],
-        "plan": "直接按输入的关键词检索",
-    }
-    if not fallback["query"]:
-        return fallback
-
-    parsed = _call_json(EXTRACT_PROMPT, message, max_tokens=320)
-    if not parsed:
-        return fallback
-
-    query = str(parsed.get("query") or "").strip() or fallback["query"]
-    source = str(parsed.get("source") or "all").strip().lower()
-    if source not in ("all", "cn", "en"):
-        source = "all"
-    try:
-        limit = int(parsed.get("limit") or 10)
-    except (TypeError, ValueError):
-        limit = 10
-    limit = min(max(1, limit), 10)
-    note = str(parsed.get("note") or "").strip()[:40] or fallback["note"]
-    plan = str(parsed.get("plan") or "").strip()[:60] or fallback["plan"]
-
-    return {"query": query, "source": source, "limit": limit, "note": note, "plan": plan}
+    return providers.search_papers(query, limit, source, min_relevance)
 
 
-def _strip_json_fence(text):
-    """模型偶尔仍会包一层 ```json ... ```，这里容错剥掉。"""
-    t = (text or "").strip()
-    if t.startswith("```"):
-        t = t.split("\n", 1)[-1]
-        if t.rstrip().endswith("```"):
-            t = t.rstrip()[:-3]
-    return t.strip()
+@tool
+def get_paper_detail(paper_id: str) -> str:
+    """获取论文详细信息。参数 paper_id 可以是检索结果里的 id 字段，也可以是论文标题。"""
+    return providers.get_detail(paper_id)
 
 
-def _has_cjk(text):
-    """检索词里有没有汉字 —— 用来决定「全部」该走哪条检索分支。"""
-    return any("\u4e00" <= ch <= "\u9fff" for ch in (text or ""))
+def _make_research_tool(notify, user_id):
+    """造一个"把整件事移交出去"的工具：模型负责规划，执行交给工作流引擎。
 
-
-def _core_term(query):
-    """取检索词里最核心的一段，用于结果太差时重试。
-
-    中文技术检索经常是混合写法（"图神经网络 GNN 综述"），而拉丁词才是
-    最有辨识度的那部分，所以优先返回最长的英文/数字串；
-    没有拉丁词时才取最长的连续汉字片段
-    （"图神经网络 综述" -> "图神经网络"）。
+    为什么是每次请求现造，而不是像 search_papers 那样做成全局工具：
+    工具跑在 agent 的工作线程里，要把"已规划好哪条工作流"告诉同一请求的
+    SSE 生成器。用闭包捕获 notify 回调是最省事也最不会串线的做法 ——
+    换成模块级变量，两个用户同时聊天就会互相覆盖。
     """
-    words = re.findall(r"[A-Za-z][A-Za-z0-9\-]{1,}", query or "")
-    if words:
-        return max(words, key=len)
-    runs = re.findall(r"[\u4e00-\u9fff]+", query or "")
-    return max(runs, key=len) if runs else ""
 
+    @tool
+    def start_research_workflow(goal: str) -> str:
+        """把"写综述/做文献调研/出研究报告"这类整篇任务移交科研工作流引擎。
 
-def _looks_off_topic(papers, query):
-    """判断结果是不是"跑题"了（而不只是"没结果"）。
+        适用：用户要一篇综述、研究现状、文献调研、带参考文献的报告。
+        不适用：只查几篇文献（用 search_papers）、查某篇的详情（用 get_paper_detail）。
 
-    为什么不能只看"有没有结果"：providers 的相关度是按 2-gram 覆盖率算的，
-    "图神经网络 综述" 会命中《基于BP神经网络的股票价格预测研究》
-    —— 因为标题里有"神经网络"，分数不为 0，于是过滤不会触发。
-    但这类结果对用户毫无价值。
+        参数:
+            goal: 研究目标，用一句话写清楚研究对象和范围，
+                  例如"图神经网络在遥感图像语义分割中的应用进展"。
 
-    这里用更贴题的标准：检索词里**最长的中文片段**是否出现在靠前结果里。
-    实测 "图神经网络 综述" 的前三名标题都不含"图神经网络"，判定跑题；
-    而 "乡村振兴 农村经济" 的前三名标题都含"乡村振兴"，判定正常。
-    只对中文片段做这个判断（英文侧由 S2 的相关度排序兜着，本来就比较准）。
-    """
-    runs = re.findall(r"[\u4e00-\u9fff]+", query or "")
-    core = max(runs, key=len) if runs else ""
-    if len(core) < 3 or not papers:
-        return False
-    for p in papers[:3]:
-        title = p.get("title") or ""
-        if core in title:
-            return False
-        # 也接受"核心词组被拆开但主要部分命中"的情况，避免误判
-    return True
+        引擎会自动完成：检索筛选 -> 信息抽取 -> 综述生成 -> 统计可视化 -> 参考文献格式化，
+        产出带 GB/T 7714 参考文献的 Markdown 报告，支持中断与断点续跑。
+        调用后不要臆造综述内容，只需告诉用户方案已就绪、可以开始执行。
+        """
+        text = (goal or "").strip()
+        if len(text) < 4:
+            return json.dumps({"error": "goal_too_short",
+                               "message": "研究目标太短，请补充研究对象与范围"},
+                              ensure_ascii=False)
+        try:
+            plan = wf.plan_workflow(text)
+            workflow_id = db.create_workflow(user_id, text, plan) if user_id else None
+        except Exception as e:  # noqa: BLE001 - 规划失败不能让整轮对话崩掉
+            return json.dumps({"error": "plan_failed", "message": f"{type(e).__name__}: {e}"},
+                              ensure_ascii=False)
 
+        notify({"workflow_id": workflow_id, "goal": text, "plan": plan})
+        steps = "、".join(s["title"] for s in wf.STEPS)
+        # 返回**一段自然语言**，不要用 "字段：值" 的清单，更不要用 JSON。
+        # 实测教训：返回 JSON 时，模型会把 JSON 原样当答复吐出来；
+        # 改成 "字段：值" 的清单后，模型照样照着清单拼了一个 JSON 对象
+        # （正文里出现 {"topic":"...","query":"...","sections":[...]}）。
+        # 模型会模仿工具返回的形状，所以这里就给成散文。
+        return (
+            f"已为用户规划好一条科研工作流（编号 {workflow_id}），主题是"
+            f"「{plan.get('topic') or text}」，准备用检索式「{plan.get('query')}」"
+            f"去查{plan.get('source')}范围的文献，重点关注{plan.get('focus')}。"
+            f"执行流程依次是{steps}。"
+            "界面上的「开始执行」按钮已经就绪，点击后开始跑，"
+            "中途可以随时中断，之后能从断点继续。"
+            "请用简体中文、以自然的段落转述这些要点，告诉用户方案已就绪；"
+            "不要编造综述内容，也不要用花括号或引号列出字段。"
+        )
 
-def _compact_papers(papers, title_chars=90, abstract_chars=180):
-    """把结果压成给模型看的最小字段，避免把整篇摘要塞进上下文。
-
-    只给模型"它需要用来判断和归纳"的东西；列表渲染仍然走完整的 papers，
-    模型碰不到那些字段。
-    """
-    out = []
-    for p in papers or []:
-        out.append({
-            "title": (p.get("title") or "")[:title_chars],
-            "abstract": (p.get("abstract") or "")[:abstract_chars],
-            "year": p.get("year"),
-            "venue": (p.get("journal") or p.get("venue") or "")[:40],
-            "citations": p.get("citationCount") or 0,
-            "source": p.get("sourceLabel") or p.get("source") or "",
-            "relevance": p.get("relevance"),
-        })
-    return out
-
-
-def _judge_results(papers, query, limit):
-    """智能体的"观察"步骤：这次检索到底够不够好？
-
-    用便宜的本地规则判断，而不是再调一次模型 —— 判断标准是可解释的，
-    也省掉一次往返。返回 (是否够好, 给模型看的原因)。
-    """
-    if not papers:
-        return False, "一条结果都没有"
-
-    reasons = []
-    got = len(papers)
-
-    # 1. 数量够不够。
-    #    阈值要跟着 limit 走：limit=5 时只返回 2 条，完全可能是语料本身就只有
-    #    这么多，这时再触发一轮重检索纯属浪费（还要多花一次模型调用）。
-    floor = 2 if limit <= 5 else 3
-    if got < min(floor, limit):
-        reasons.append(f"只拿到 {got} 条，偏少")
-
-    # 2. 是否跑题（核心中文片段没出现在靠前标题里）
-    if _looks_off_topic(papers, query):
-        core = _core_term(query) or query
-        reasons.append(f"靠前结果的标题里没有「{core}」，很可能跑题")
-
-    # 3. 平均相关度
-    scores = [p.get("relevance") for p in papers if isinstance(p.get("relevance"), (int, float))]
-    if scores and sum(scores) / len(scores) < 35:
-        reasons.append(f"平均相关度只有 {round(sum(scores) / len(scores))}")
-
-    # 4. 是不是只有一个源在供给（另一个源可能被限流了）
-    srcs = {p.get("source") for p in papers if p.get("source")}
-    if len(srcs) == 1 and got >= 3:
-        reasons.append("只有一个数据源返回了结果")
-
-    # 第 4 条单独出现不算失败（中文检索本来就只有 OpenAlex）
-    blocking = [r for r in reasons if "只有一个数据源" not in r]
-    if blocking:
-        return False, "；".join(reasons)
-    return True, f"{got} 条，覆盖正常"
-
-
-def _should_keep_old(new_payload, old_papers):
-    """第二次检索是否比第一次更好？不好就保留旧的，别越搜越差。"""
-    new_papers = (new_payload or {}).get("papers") or []
-    if not new_papers:
-        return False
-    new_avg = _avg_relevance(new_papers)
-    old_avg = _avg_relevance(old_papers)
-    # 结果更多，或者量差不多但平均相关度明显更高
-    if len(new_papers) > len(old_papers):
-        return True
-    return new_avg > old_avg + 10
-
-
-def _avg_relevance(papers):
-    scores = [p.get("relevance") for p in papers if isinstance(p.get("relevance"), (int, float))]
-    return sum(scores) / len(scores) if scores else 0
-
-
-def _make_llm(max_tokens=400):
-    """统一的模型构造：强制 JSON 输出、温度为 0。"""
-    return ChatDeepSeek(
-        model=DEEPSEEK_MODEL,
-        temperature=0,
-        max_tokens=max_tokens,
-        model_kwargs={"response_format": {"type": "json_object"}},
-    )
-
-
-def _call_json(prompt, user_content, max_tokens=400):
-    """调一次模型并解析 JSON；任何失败都返回 None（由调用方决定降级策略）。"""
-    try:
-        resp = _make_llm(max_tokens).invoke([
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": user_content},
-        ])
-        raw = resp.content if isinstance(resp.content, str) else str(resp.content)
-        parsed = json.loads(_strip_json_fence(raw))
-        return parsed if isinstance(parsed, dict) else None
-    except Exception:
-        return None
-
-
-def _replan(query, reason, papers, source):
-    """智能体的"反思后重规划"：上一轮不够好时，让模型换一个检索策略。
-
-    给它的信息包括"为什么不够好"和"已经拿到什么"，避免它给出重复的策略。
-    """
-    parsed = _call_json(REPLAN_PROMPT, json.dumps({
-        "上一轮检索词": query,
-        "上一轮范围": source,
-        "问题": reason,
-        "已拿到的标题": [p.get("title", "")[:60] for p in (papers or [])[:5]],
-    }, ensure_ascii=False), max_tokens=300)
-
-    if not parsed:
-        return None
-    new_query = str(parsed.get("query") or "").strip()
-    if not new_query or new_query == query:
-        return None
-    new_source = str(parsed.get("source") or source).strip().lower()
-    if new_source not in ("all", "cn", "en"):
-        new_source = source
-    return {
-        "query": new_query,
-        "source": new_source,
-        "thought": str(parsed.get("thought") or "").strip()[:60],
-    }
-
-
-def _synthesize(message, papers, query):
-    """智能体的"归纳"步骤：读懂结果，给出要点与后续方向。
-
-    硬性约束：只能依据给定结果，不许出现列表之外的论文/作者/数字。
-    这一步纯属附加价值 —— 失败了也只是少一块内容，不影响结果列表。
-    """
-    parsed = _call_json(SYNTHESIS_PROMPT, json.dumps({
-        "用户原始需求": message,
-        "实际检索词": query,
-        "检索到的文献": _compact_papers(papers),
-    }, ensure_ascii=False), max_tokens=700)
-    if not parsed:
-        return None
-
-    summary = str(parsed.get("summary") or "").strip()
-    if not summary:
-        return None
-
-    def _str_list(key, cap=3):
-        raw = parsed.get(key)
-        if not isinstance(raw, list):
-            return []
-        out = []
-        for item in raw:
-            if isinstance(item, str) and item.strip():
-                out.append(item.strip()[:120])
-            elif isinstance(item, dict):
-                t = item.get("text") or item.get("question") or ""
-                if str(t).strip():
-                    out.append(str(t).strip()[:120])
-            if len(out) >= cap:
-                break
-        return out
-
-    return {
-        "summary": summary[:600],
-        "highlights": _str_list("highlights"),
-        "followups": _str_list("followups"),
-        "caveat": str(parsed.get("caveat") or "").strip()[:160],
-    }
+    return start_research_workflow
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -453,18 +440,10 @@ def index():
     return send_from_directory(STATIC_DIR, "index.html")
 
 
-@app.get("/static/index.html")
-def index_alias():
-    """旧版把整个 static/ 挂在根路径上，所以 /static/index.html 曾经也能打开。
-    保留这个别名只为不破坏别人可能存过的书签，仍然只放行这一个白名单文件。"""
-    return send_from_directory(STATIC_DIR, "index.html")
-
-
 @app.get("/<path:filename>")
 def static_whitelist(filename):
     """只放行白名单里的静态文件；其余（例如误放进去的 .py/.bak/.db）一律 404。
 
-    前端是单文件应用（内联 CSS/JS，无外部引用），所以这个白名单只有一项。
     send_from_directory 自身会拒绝越权路径，这里的成员判断是第二道闸。
     """
     if filename not in STATIC_FILES:
@@ -493,10 +472,26 @@ def register():
         return jsonify({"error": "密码需包含大写字母、小写字母和数字"}), 400
 
     success, message = db.register_user(username, password, email)
-    if success:
-        return jsonify({"success": True, "message": message})
-    else:
+    if not success:
         return jsonify({"error": message}), 400
+
+    # 注册成功直接建会话（自动登录）：
+    # 以前注册完还要再手动登录一次，用户经常以为是"注册没生效"。
+    # 账号本身已经写进 literature.db，并同步到项目里的 accounts.json，
+    # 下次运行（甚至换个目录）都能用同一套账号登录。
+    user = db.login_user(username, password)
+    if user:
+        session.permanent = True          # 30 天持久会话，别每次都要重登
+        session['user_id'] = user['id']
+        session['username'] = user['username']
+        return jsonify({
+            "success": True,
+            "message": "注册成功，已自动登录",
+            "user": {"id": user['id'], "username": user['username']},
+        })
+
+    # 极端情况（库不可写等）：注册成功但建不了会话，让前端切回登录模式
+    return jsonify({"success": True, "message": "注册成功，请登录"})
 
 
 @app.post("/api/login")
@@ -510,6 +505,7 @@ def login():
 
     user = db.login_user(username, password)
     if user:
+        session.permanent = True          # 30 天持久会话
         session['user_id'] = user['id']
         session['username'] = user['username']
         return jsonify({
@@ -539,9 +535,70 @@ def get_current_user():
 #  路由：搜索历史
 # ═══════════════════════════════════════════════════════════════
 
+@app.get("/api/history")
+@login_required
+def get_history():
+    history = db.get_search_history(session['user_id'], 20)
+    return jsonify({"success": True, "history": history})
+
+
+@app.delete("/api/history")
+@login_required
+def clear_history():
+    db.clear_search_history(session['user_id'])
+    return jsonify({"success": True, "message": "历史已清空"})
+
+
 # ═══════════════════════════════════════════════════════════════
 #  路由：会话 / 对话记录（登录后可用）
 # ═══════════════════════════════════════════════════════════════
+
+@app.get("/api/conversations")
+@login_required
+def list_conversations():
+    """当前用户的会话列表"""
+    conversations = db.get_conversations(session['user_id'])
+    return jsonify({"success": True, "conversations": conversations})
+
+
+@app.post("/api/conversations")
+@login_required
+def new_conversation():
+    """新建会话（标题可用首条消息自动生成）"""
+    data = request.get_json(force=True, silent=True) or {}
+    title = (data.get('title') or '新对话').strip() or '新对话'
+    conversation_id = db.create_conversation(session['user_id'], title)
+    if not conversation_id:
+        return jsonify({"error": "创建会话失败"}), 500
+    return jsonify({"success": True, "conversation": {"id": conversation_id, "title": title[:50]}})
+
+
+@app.get("/api/conversations/<int:conversation_id>")
+@login_required
+def read_conversation(conversation_id):
+    """读取某个会话的全部消息"""
+    conversation, messages = db.get_conversation_messages(session['user_id'], conversation_id)
+    if not conversation:
+        return jsonify({"error": "会话不存在"}), 404
+    return jsonify({"success": True, "conversation": conversation, "messages": messages})
+
+
+@app.delete("/api/conversations/<int:conversation_id>")
+@login_required
+def remove_conversation(conversation_id):
+    """删除某个会话"""
+    if db.delete_conversation(session['user_id'], conversation_id):
+        return jsonify({"success": True, "message": "已删除"})
+    return jsonify({"error": "会话不存在"}), 404
+
+
+@app.delete("/api/conversations")
+@login_required
+def clear_all_conversations():
+    """清空当前用户的全部会话"""
+    db.clear_conversations(session['user_id'])
+    return jsonify({"success": True, "message": "已清空所有对话记录"})
+
 
 # ═══════════════════════════════════════════════════════════════
 #  路由：收藏（简化版）
@@ -678,6 +735,33 @@ def polish_abstract():
 #  路由：聊天
 # ═══════════════════════════════════════════════════════════════
 
+def _parse_conversation_id(value):
+    """把前端传来的 conversation_id 规整成 int 或 None"""
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _papers_from_tool_output(content):
+    """从工具返回的 JSON 字符串里取出结构化论文列表。
+
+    （工具返回 {"papers": [...]}，这里直接解析，前端不再靠正则从
+    Markdown 里猜标题 —— 那样一篇结果只能猜出一篇，也拿不到作者/年份。）
+    """
+    if not isinstance(content, str) or '"papers"' not in content:
+        return []
+    try:
+        data = json.loads(content)
+    except (ValueError, TypeError):
+        return []
+    if isinstance(data, dict) and isinstance(data.get("papers"), list):
+        return [p for p in data["papers"] if isinstance(p, dict)]
+    return []
+
+
 def _pdf_filename(paper):
     """给下载的 PDF 起一个人能看懂的名字：年份_第一作者_标题.pdf
 
@@ -704,203 +788,269 @@ def _pdf_filename(paper):
     return "_".join(parts) + ".pdf"
 
 
-@app.post("/api/search")
-def search():
-    """检索接口 —— 一个受控的智能体循环。
+def _resolve_conversation(user_id, requested_id, question):
+    """在流式响应之前就确定本轮要写入哪个会话，并返回该会话 id。
 
-    四步（每一步都往前端推 agent_step 事件，界面能看到它在做什么）：
-        1. 规划   理解需求，产出检索词 / 范围 / 策略说明
-        2. 检索   直连 providers 多源并发检索
-        3. 观察   自评结果够不够好；不够就用**不同角度**重规划再检索一轮（最多 1 次）
-        4. 归纳   读懂结果给出导读、要点、可继续检索的方向
-
-    为什么这样设计而不是让模型自由调工具：
-    检索路径保持确定、可控（最多 2 轮、每轮都有超时与降级），
-    模型只在"规划 / 评估后的重规划 / 归纳"这三处发挥判断力。
-    这也保证了**模型编不出论文**：列表数据始终来自 providers。
-
-    任何一步失败都不会让搜索不可用：
-    规划失败 -> 原样当关键词；重规划失败 -> 沿用第一轮结果；
-    归纳失败 -> 只是少一块导读，结果列表照常返回。
-
-    SSE 事件：
-        agent_step  智能体的阶段动作（前端渲染成步骤条）
-        query       最终采用的检索参数
-        papers      结构化结果
-        synthesis   导读 / 要点 / 后续方向
-        warn        某个数据源本轮失败
-        result      结果统计
-        error       出错
-        done        结束
+    - 请求里的会话不存在或不属于该用户 -> 新建一个
+    - 没有请求会话 -> 新建一个（标题取首条消息）
+    提前决定很关键：否则 SSE 会先把别的会话 id 告诉前端，导致下一轮又开新会话。
     """
+    if not user_id:
+        return None
+
+    if requested_id:
+        _, existing = db.get_conversation_messages(user_id, requested_id)
+        if existing:
+            return requested_id
+    # 只发了图没写字时 question 是空的，标题给个可辨认的占位，
+    # 否则左侧会话列表会出现一条没有标题的记录。
+    title = (question or "").strip()[:30] or "（图片提问）"
+    try:
+        return db.create_conversation(user_id, title)
+    except Exception:
+        return None
+
+
+def _persist_turn(user_id, conversation_id, question, answer, results_count=0):
+    """把一轮问答写进搜索历史和会话（任一失败都不影响聊天本身）"""
+    try:
+        db.save_search_history(user_id, question, results_count)
+    except Exception:
+        pass
+
+    if not user_id or not conversation_id:
+        return
+    try:
+        db.append_message(user_id, conversation_id, "user", question)
+        db.append_message(user_id, conversation_id, "assistant", answer)
+    except Exception:
+        pass
+
+
+@app.post("/api/chat")
+def chat():
     data = request.get_json(force=True, silent=True) or {}
     message = (data.get("message") or "").strip()
-    source_pref = (data.get("source_pref") or "").strip().lower()
+    history = data.get("history") or []
+    source_pref = (data.get("source_pref") or "all").strip().lower()
 
-    if not message:
-        return jsonify({"error": "请输入检索内容"}), 400
-
+    # 图片/PDF 附件。产品要求**不保存图片**，所以全程只在内存里过一遍：
+    # 解码 -> （PDF 则渲染成 PNG）-> 拼进本轮消息 -> 发完即丢。
+    # 不落盘、不入库、不写日志（日志里只有体积和格式，没有 base64 内容）。
     try:
-        limit = min(max(1, int(data.get("per_page") or data.get("limit") or 20)), 50)
-    except (TypeError, ValueError):
-        limit = 20
-    try:
-        offset = max(0, int(data.get("offset") or 0))
-    except (TypeError, ValueError):
-        offset = 0
-    page = offset // limit + 1
+        attach_blocks, attach_notes = attachments.prepare_attachments(
+            data.get("files") or [])
+    except attachments.AttachmentError as e:
+        return jsonify({"error": str(e)}), 400
 
-    # 是否要跑"归纳"这一步。关掉可以省一次模型调用（例如压测时）。
-    want_synthesis = data.get("synthesis", True) is not False
+    # 只发了图没写字也要能工作：此时给一句中性的默认指令，
+    # 具体怎么处理交给系统提示词里的图片规则去判断。
+    if not message and not attach_blocks:
+        return jsonify({"error": "message is required"}), 400
 
-    def sse_pack(obj):
-        # SSE 事件之间用空行分隔
+    messages = []
+    for m in history:
+        role = m.get("role")
+        content = m.get("content")
+        if role in {"user", "assistant", "system"} and isinstance(content, str):
+            messages.append({"role": role, "content": content})
+
+    # 前端的"文献来源"开关：以系统消息的形式带进本轮上下文。
+    # 不拼进用户消息里，是因为那样会被模型当成用户说的话，也会污染保存下来的对话记录。
+    if source_pref in ("cn", "en"):
+        scope = "仅中文文献（source='cn'）" if source_pref == "cn" else "仅英文文献（source='en'）"
+        messages.insert(0, {
+            "role": "system",
+            "content": f"用户当前的文献来源偏好是：{scope}。调用 search_papers 时必须使用这个 source 取值。",
+        })
+
+    messages.append({"role": "user",
+                     "content": attachments.build_user_content(
+                         message, attach_blocks, attach_notes)})
+
+
+    user_id = session.get('user_id') if 'user_id' in session else None
+
+    # 登录用户：本轮对话写入哪个会话（流式开始前就定下来）
+    conversation_id = _resolve_conversation(user_id, _parse_conversation_id(data.get("conversation_id")), message)
+
+    def sse_pack(obj: dict) -> str:
         return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
-    def step(phase, text, status="run"):
-        return sse_pack({"type": "agent_step", "phase": phase,
-                         "text": text, "status": status}).encode("utf-8")
-
     def generate():
-        # 翻第 2 页以后：检索词与来源沿用上次，不再重规划，归纳也不必重做
-        # （内容没变）—— 省掉两次模型调用，翻页要快。
-        is_paged = offset > 0
+        # ── 为什么用"工作线程 + 队列"而不是直接 invoke ──────────────
+        # 原来用 AGENT.invoke()：整段答案生成完才开始切片下发，
+        # 用户要盯着一个空泡泡等十几秒（学术接口还经常要退避重试），
+        # 看起来就像卡死了。改成 astream_events 之后可以：
+        #   1. 一边生成一边吐字（真流式）
+        #   2. 在调用工具时发一个 status 事件，让前端显示"正在检索…"
+        # 但 astream_events 是 async 的，而 Flask 的生成器是同步的，
+        # 所以让它在独立线程里跑，事件经 Queue 交给生成器转成 SSE。
+        if conversation_id:
+            yield sse_pack({"type": "conversation_id", "conversation_id": conversation_id}).encode("utf-8")
 
-        # ── 1. 规划 ────────────────────────────────────────────────
-        if is_paged:
-            yield step("plan", f"继续查看「{message}」第 {page} 页", "done")
-            source = source_pref if source_pref in ("all", "cn", "en") else "all"
-            params = {"query": message, "source": source, "limit": limit,
-                      "note": "", "plan": ""}
-            if source == "all":
-                source = "cn" if _has_cjk(params["query"]) else "en"
-            params["source"] = source
-        else:
-            yield step("plan", "理解检索需求", "run")
-            params = _extract_search_params(message)
-            source = source_pref if source_pref in ("all", "cn", "en") else params["source"]
-            # 「全部」再按检索词语言收窄：providers 的 "all" 是"英文源 + OpenAlex 中文过滤"
-            # 两路并发，英文检索词下那路中文纯属噪音（实测查 graph neural network 会
-            # 返回《光学神经网络及其应用》）。中文词走 cn、英文词走 en。
-            if source == "all":
-                source = "cn" if _has_cjk(params["query"]) else "en"
-            params["source"] = source
-            params["limit"] = limit
-            yield step("plan", params.get("plan") or "已确定检索策略", "done")
-        yield sse_pack({"type": "query", **params}).encode("utf-8")
+        yield sse_pack({"type": "status", "text": "正在思考…"}).encode("utf-8")
 
-        # 排序说明：结果按「相关度 -> 被引/年份综合分」降序（打分函数在 providers 里）
-        if not is_paged:
-            yield step("rank", "按相关度 + 被引/年份排序", "done")
+        events = queue.Queue()
+        state = {"tool_used": False, "answer": "", "papers": [], "workflow": None,
+                 "muted": False, "mute_sent": False,
+                 # 思考模型（deepseek-flash）会先吐 reasoning_content：
+                 # 用这两个字段记录"思考了多少字""是否已提示过思考中"
+                 "reasoning_chars": 0, "thinking_notified": False}
 
-        # ── 2. 检索 ────────────────────────────────────────────────
-        # 让聚合层直接把 [offset, offset+limit) 这一段取回来 —— 不要在路由里
-        # 拿 offset=0 的一整段再切片：那样第 2 页会切到空（踩过这个坑）。
-        # 翻页时窗口就是本页大小，避免为第 N 页重复拉前面的内容。
-        window = limit
+        def suppress_json():
+            """判断本轮回答是不是"模型把工具返回的结构化数据当答案吐了出来"。
 
-        def fetch(q, src, win, off=0):
-            """取回 [off, off+win) 这段；异常收敛成错误 payload，不抛出。"""
+            实测：移交工作流那一步，模型的回答从 `{"topic": "…", "query": "…",
+            "sections": [...]}` 开始 —— 这是把工具的返回原样复读，不是给人看的话。
+            改成给它散文形状的返回后仍偶发，所以在出口再兜一层：
+            只要回答以 `{` 或 `[` 开头，就静音后续 token，末尾用一句人话代替。
+            前端本来就有结构化渲染（方案卡 / 论文卡片），不需要正文再复读一遍。
+            """
+            if state["muted"]:
+                return True
+            head = state["answer"].lstrip()
+            if head[:1] in ("{", "["):
+                state["muted"] = True
+            return state["muted"]
+
+        def on_workflow_ready(info):
+            state["workflow"] = info
+
+        # 每个请求现造一个 agent：多挂一个"移交科研工作流"的工具，
+        # 它要把结果回传给本次请求的 state（见 _make_research_tool 的说明）。
+        #
+        # 带图片时把 max_tokens 抬高：deepseek-flash 读图会先做很长的推理
+        # （实测 241~842 字），推理内容占用的是同一个 max_tokens 预算，
+        # 额度给小了就会出现"正文为空"——看起来像模型没回答。
+        model_kwargs = {"model": DEEPSEEK_MODEL, "temperature": 0}
+        if attach_blocks:
+            model_kwargs["max_tokens"] = attachments.VISION_MIN_MAX_TOKENS
+        agent = create_agent(
+            model=ChatDeepSeek(**model_kwargs),
+            tools=[search_papers, get_paper_detail, _make_research_tool(on_workflow_ready, user_id)],
+            system_prompt=DEFAULT_SYSTEM_PROMPT,
+        )
+
+        async def run_agent():
             try:
-                pl = json.loads(providers.search_papers(q, win, src, 0, off))
-            except Exception as e:  # noqa: BLE001 - 任何异常都不该让搜索框失效
-                return {"error": "exception",
-                        "message": f"{type(e).__name__}: {str(e)[:300]}"}, []
-            return pl, (pl.get("papers") or [])
+                async for ev in agent.astream_events({"messages": messages}, version="v2"):
+                    kind = ev.get("event")
 
-        yield step("search", f"检索「{params['query']}」", "run")
-        payload, papers = fetch(params["query"], source, window, offset)
-        if payload.get("error"):
-            yield sse_pack({
-                "type": "error",
-                "message": payload.get("message") or payload["error"],
-                "retryable": payload.get("retryable", False),
-                "suggestion": payload.get("suggestion", ""),
-            }).encode("utf-8")
-            yield sse_pack({"type": "done"}).encode("utf-8")
-            return
+                    if kind == "on_tool_start":
+                        # 工具调用前模型常会先说一句"我先搜索一下"（还可能是英文），
+                        # 那不是给用户看的答案，丢掉它并切到"检索中"状态
+                        state["tool_used"] = True
+                        state["answer"] = ""
+                        name = ev.get("name") or ""
+                        events.put(("status", "正在规划研究方案…"
+                                    if name == "start_research_workflow"
+                                    else "正在检索文献源…"))
 
-        used_query = params["query"]
-        used_source = source
-        warnings = list(payload.get("warnings") or [])
-        yield step("search", f"取回 {len(papers)} 条（第 {page} 页）", "done")
+                    elif kind == "on_tool_end":
+                        output = (ev.get("data") or {}).get("output")
+                        content = getattr(output, "content", None)
+                        if content is None and isinstance(output, str):
+                            content = output
+                        papers = _papers_from_tool_output(content)
+                        if papers:
+                            state["papers"].extend(papers)
+                            events.put(("papers", list(state["papers"])))
+                        events.put(("status", "正在阅读检索结果并生成回答…"))
 
-        # ── 3. 观察 + 重规划（只在第一页做）──────────────────────────
-        if is_paged:
-            enough, reason = True, ""
-        else:
-            enough, reason = _judge_results(papers, used_query, limit)
-            if enough:
-                yield step("observe", f"结果评估：{reason}", "done")
+                    elif kind == "on_chat_model_stream":
+                        chunk = (ev.get("data") or {}).get("chunk")
+                        # 只把真正的"回答文字"当正文。tool_call_chunks 非空说明
+                        # 这一段是**工具参数**（模型在拼 {"goal": "..."}），
+                        # 不是给用户看的内容 —— 实测它一度被当成正文发出去。
+                        if getattr(chunk, "tool_call_chunks", None):
+                            continue
+
+                        # 思考模型（deepseek-flash / v4-pro）会先吐一大段
+                        # reasoning_content，正文要等它结束才开始。
+                        # 实测一个需要推理的问题：思考阶段长达 21 秒，
+                        # 这期间 content 一直是空的 —— 如果只读 content，
+                        # 界面上就是一个空白泡泡转 21 秒，看起来完全像卡死。
+                        # 所以这里把"思考中"推给前端，让用户知道它在干活。
+                        reasoning = (getattr(chunk, "additional_kwargs", None) or {}).get(
+                            "reasoning_content")
+                        if reasoning:
+                            state["reasoning_chars"] = state.get("reasoning_chars", 0) + len(
+                                str(reasoning))
+                            # 只在第一片时报一次，避免每个分片都刷状态
+                            if not state.get("thinking_notified"):
+                                state["thinking_notified"] = True
+                                events.put(("status", "模型正在思考…"))
+
+                        text = getattr(chunk, "content", None)
+                        if text:
+                            # 正文一开始就把状态切回"生成回答"，否则会一直停在
+                            # "思考中"。用"是不是第一次拿到正文"来判断，而不是去
+                            # 猜 langchain 给分片起的 type 名字。
+                            if state.get("thinking_notified"):
+                                state["thinking_notified"] = False
+                                events.put(("status", "正在生成回答…"))
+                            state["answer"] += text
+                            # 有工具调用时，工具之后的内容才是答案，直接边生成边发
+                            if state["tool_used"] and not suppress_json():
+                                events.put(("token", text))
+
+                events.put(("done", None))
+            except Exception as e:  # noqa: BLE001 - 异常要送回生成器，不能只留在子线程里
+                events.put(("error", f"{type(e).__name__}: {str(e)[:500]}"))
+
+        threading.Thread(target=lambda: asyncio.run(run_agent()), daemon=True).start()
+
+        # 主线程只做一件事：把队列里的事件转成 SSE。带总超时，避免永久挂住
+        deadline = time.time() + 240
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                yield sse_pack({"type": "error", "message": "检索超时（超过 240 秒），请重试"}).encode("utf-8")
+                break
+            try:
+                kind, value = events.get(timeout=min(remaining, 1.0))
+            except queue.Empty:
+                continue
+
+            if kind == "done":
+                break
+            if kind == "error":
+                yield sse_pack({"type": "error", "message": value}).encode("utf-8")
+                break
+            if kind == "status":
+                yield sse_pack({"type": "status", "text": value}).encode("utf-8")
+            elif kind == "papers":
+                yield sse_pack({"type": "papers", "papers": value}).encode("utf-8")
+            elif kind == "token":
+                yield sse_pack({"type": "token", "token": value}).encode("utf-8")
+
+        answer = state["answer"] or "抱歉，未能获取到回复"
+
+        # 被静音的情况（模型把结构化数据当答案复读了）：用一句人话代替，
+        # 并把补发的 token 也改成这句 —— 否则用户会看到一坨花括号。
+        if state["muted"]:
+            if state["workflow"]:
+                answer = ("已经为这个题目规划好一条科研工作流（检索筛选 → 信息抽取 → "
+                          "综述生成 → 统计可视化 → 参考文献格式化）。"
+                          "点下面的「开始执行」就可以跑，中途能中断，之后可以从断点继续。")
             else:
-                yield step("observe", f"结果不够理想：{reason}", "warn")
+                answer = "已获取到结果，结构化内容见下方卡片。"
 
-                core = _core_term(used_query)
-                plan2 = None
-                if core and core != used_query:
-                    # 先试最便宜的一招：回退到核心词（不必花一次模型调用）
-                    plan2 = {"query": core, "source": used_source,
-                             "thought": f"原词过窄，退回核心概念「{core}」"}
-                else:
-                    yield step("replan", "换个角度重新组织检索词", "run")
-                    plan2 = _replan(used_query, reason, papers, used_source)
+        # 没有调用工具的情况（闲聊类问题）：token 没被实时发出去，这里补发
+        if not state["tool_used"] or state["muted"]:
+            for i in range(0, len(answer), 3):
+                yield sse_pack({"type": "token", "token": answer[i:i + 3]}).encode("utf-8")
 
-                if plan2:
-                    if plan2.get("thought"):
-                        yield step("replan", plan2["thought"], "run")
-                    yield step("search", f"重新检索「{plan2['query']}」", "run")
-                    # 换词后从第 1 页重新取（offset 归零）
-                    payload2, papers2 = fetch(plan2["query"], plan2["source"], window, 0)
+        if user_id:
+            # results_count 记的是"这一轮检索到几篇论文"，不是消息条数
+            _persist_turn(user_id, conversation_id, message, answer, len(state["papers"]))
 
-                    if _should_keep_old(payload2, papers):
-                        papers = papers2
-                        used_query = plan2["query"]
-                        used_source = plan2["source"]
-                        warnings += list(payload2.get("warnings") or [])
-                        enough2, reason2 = _judge_results(papers, used_query, limit)
-                        yield step("search", f"取回 {len(papers)} 条", "done")
-                        yield step("observe", f"结果评估：{reason2}", "done" if enough2 else "warn")
-                        # 检索词变了，把最终参数补报给前端
-                        yield sse_pack({"type": "query", "query": used_query, "source": used_source,
-                                        "limit": limit, "note": params.get("note", ""),
-                                        "plan": plan2.get("thought") or params.get("plan", ""),
-                                        "revised": True}).encode("utf-8")
-                    else:
-                        yield step("replan", "新策略没有更好，沿用第一轮结果", "done")
-                    yield step("replan", "新策略没有更好，沿用第一轮结果", "done")
+        # 模型决定"这事该交给工作流"时，把方案和入口发给前端，
+        # 由界面渲染成「开始执行」按钮（执行是分钟级的，不适合塞在聊天流里）。
+        if state["workflow"]:
+            yield sse_pack({"type": "workflow_ready", **state["workflow"]}).encode("utf-8")
 
-        sources = sorted({p.get("sourceLabel") for p in papers if p.get("sourceLabel")})
-        if papers:
-            yield sse_pack({"type": "papers", "papers": papers}).encode("utf-8")
-
-        for w in warnings:
-            yield sse_pack({"type": "warn", "text": w}).encode("utf-8")
-
-        # ── 4. 归纳（只在第一页做：翻页内容相同，重做纯属浪费）────────
-        synthesis = None
-        if papers and want_synthesis and not is_paged:
-            yield step("synthesize", f"阅读这 {len(papers)} 篇并归纳", "run")
-            synthesis = _synthesize(message, papers, used_query)
-            yield step("synthesize",
-                       "已生成导读" if synthesis else "结果已返回（导读生成失败）",
-                       "done" if synthesis else "warn")
-        if synthesis:
-            yield sse_pack({"type": "synthesis", **synthesis}).encode("utf-8")
-
-        # 分页信息：total_is_partial 表示"这一批取到的条数"，
-        # 不是数据源报告的总命中数（那需要额外一次请求，不值当）。
-        yield sse_pack({
-            "type": "result",
-            "total": len(papers),
-            "page": page,
-            "per_page": limit,
-            "offset": offset,
-            "has_more": len(papers) == limit,
-            "is_last_page": len(papers) < limit,
-            "sources": sources,
-            "filtered_out": payload.get("filtered_out") or 0,
-            "query": used_query,
-        }).encode("utf-8")
         yield sse_pack({"type": "done"}).encode("utf-8")
 
     headers = {
@@ -909,8 +1059,12 @@ def search():
         "X-Accel-Buffering": "no",
         "Connection": "keep-alive",
     }
-    return Response(generate(), headers=headers, mimetype="text/event-stream",
-                    direct_passthrough=True)
+    return Response(
+        generate(),
+        headers=headers,
+        mimetype="text/event-stream",
+        direct_passthrough=True,
+    )
 
 
 @app.get("/api/sources")
@@ -1022,6 +1176,254 @@ def paper_pdf(paper_id):
     )
 
 
+# ═══════════════════════════════════════════════════════════════
+#  路由：科研工作流（命题要求的自规划 + 状态管理 + 中断恢复）
+# ═══════════════════════════════════════════════════════════════
+
+# 正在跑的工作流 -> 停止标志。中断接口把它置 True，编排器每步结束会检查。
+_RUNNING = {}
+_RUNNING_LOCK = threading.Lock()
+
+
+def _wf_state_payload(wf_row, runner=None):
+    """把库里的工作流整理成前端要的结构。"""
+    steps = []
+    by_key = wf_row.get("steps") or {}
+    for s in wf.STEPS:
+        cur = by_key.get(s["key"]) or {}
+        steps.append({
+            "key": s["key"], "title": s["title"], "core": s["core"],
+            "detail_text": s["detail"],
+            "status": cur.get("status") or "pending",
+            "progress": cur.get("detail") or "",
+            "error": cur.get("error") or "",
+            "updated_at": cur.get("updated_at") or "",
+        })
+    out = {
+        "id": wf_row["id"],
+        "goal": wf_row["goal"],
+        "status": wf_row["status"],
+        "plan": wf_row.get("plan") or {},
+        "steps": steps,
+        "created_at": wf_row.get("created_at"),
+        "updated_at": wf_row.get("updated_at"),
+    }
+    ctx = wf_row.get("context") or {}
+    if ctx:
+        if ctx.get("papers"):
+            out["papers"] = ctx["papers"]
+        if ctx.get("stats"):
+            out["stats"] = ctx["stats"]
+        if ctx.get("synth"):
+            out["synth"] = ctx["synth"]
+    if wf_row.get("report_md"):
+        out["report"] = wf_row["report_md"]
+    return out
+
+
+@app.post("/api/workflow")
+@login_required
+def run_workflow():
+    """启动（或续跑）一条科研工作流。
+
+    SSE 事件：
+        plan     规划结果（topic/query/source/limit/focus/sections）
+        step     某一步的状态变化：{key, status, detail, error}
+        snapshot 阶段性快照（文献数、统计、综述、报告）
+        done     结束：{status, workflow_id}
+        error    出错
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    goal = (data.get("goal") or "").strip()
+    resume_id = data.get("workflow_id")
+    papers_override = data.get("papers")      # 人工修正后的文献列表
+
+    if not goal and not resume_id:
+        return jsonify({"error": "请填写研究目标"}), 400
+
+    # 必须在进入生成器之前把 session 读出来：生成器是在请求上下文之外被迭代的，
+    # 里面再访问 session 会抛 "Working outside of request context"（踩过这个坑）。
+    user_id = session.get("user_id")
+
+    def sse_pack(obj):
+        return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+    def generate():
+        # 这两个只在"续跑"分支里赋值，但后面无条件使用 ——
+        # 必须先给默认值，否则新工作流会抛 UnboundLocalError（同一个坑踩了两次）。
+        ctx_prev = {}
+        state_prev = {}
+        start_from = wf.STEP_KEYS[0]
+
+        # ── 已有工作流：续跑 ──────────────────────────────────
+        if resume_id:
+            row = db.get_workflow(int(resume_id), user_id)
+            if not row:
+                yield sse_pack({"type": "error", "message": "工作流不存在"}).encode("utf-8")
+                yield sse_pack({"type": "done", "status": "failed"}).encode("utf-8")
+                return
+            plan = row.get("plan") or wf.plan_workflow(row["goal"])
+            ctx_prev = row.get("context") or {}
+            # 把上一轮各步骤的状态铺回去，快照才是完整时间线
+            # （否则续跑后 search/extract 会显示成 pending，看起来像白跑了）
+            state_prev = {k: {"status": (v or {}).get("status", "pending"),
+                              "detail": (v or {}).get("detail", "")}
+                          for k, v in (row.get("steps") or {}).items()}
+            workflow_id = row["id"]
+            # 注意：不要在这里写 goal = row["goal"]。
+            # 一旦在 generate() 里给 goal 赋值，Python 就把它当成局部变量，
+            # 于是同一个函数里 else 分支的 plan_workflow(goal) 会抛
+            # UnboundLocalError（踩过这个坑）。续跑用 row["goal"] 就够了。
+            workflow_goal = row["goal"]
+            # 已完成的步骤：除了要把产物带回来，也让编排器从最早未完成的那步接着跑
+            done_keys = [k for k, v in (row.get("steps") or {}).items()
+                         if (v or {}).get("status") == "done"]
+            start_from = "search"
+            for s in wf.STEPS:
+                if s["key"] not in done_keys:
+                    start_from = s["key"]
+                    break
+            else:
+                start_from = wf.STEP_KEYS[-1]
+            yield sse_pack({"type": "plan", "plan": plan, "workflow_id": workflow_id,
+                            "resumed": True, "start_from": start_from}).encode("utf-8")
+        else:
+            # ── 新工作流：自规划 ────────────────────────────
+            yield sse_pack({"type": "step", "key": "plan", "status": "running",
+                            "title": "规划研究方案", "core": "—",
+                            "detail": "正在理解研究目标并规划步骤"}).encode("utf-8")
+            plan = wf.plan_workflow(goal)
+            workflow_id = db.create_workflow(user_id, goal, plan)
+            ctx_prev = {}
+            yield sse_pack({"type": "plan", "plan": plan, "workflow_id": workflow_id}).encode("utf-8")
+            yield sse_pack({"type": "step", "key": "plan", "status": "done",
+                            "title": "规划研究方案", "core": "—",
+                            "detail": plan.get("plan") or "已确定检索方案"}).encode("utf-8")
+
+        with _RUNNING_LOCK:
+            _RUNNING[workflow_id] = False
+
+        def should_stop():
+            with _RUNNING_LOCK:
+                return bool(_RUNNING.get(workflow_id))
+
+        # ── 为什么改成"工作线程 + 队列" ──────────────────────────
+        # 原来这里是同步跑完 runner.run()，再把事件列表一次性回放。
+        # 实测后果（profiler 的时间线）：整条流水线 12.7s，面板在 12.7s 时
+        # **一次性收到所有事件** —— 前 12.7 秒界面上只有一句"工作流执行中…"，
+        # 看起来就是"卡住了"。真实耗时其实没变，但主观感受差很多。
+        # 现在和 /api/chat 用同一套办法：编排器跑在独立线程里，
+        # 每步状态变化立刻经 Queue 推给生成器，用户能实时看到走到哪一步。
+        events = queue.Queue()
+        error_box = {}
+
+        def on_step(key, status, detail):
+            # interrupted 也要落库并推给前端，否则界面上只会看到"停在那一步"，
+            # 不知道是中断了还是卡住了。
+            db.set_workflow_step(workflow_id, key, status, detail,
+                                 detail if status == "failed" else "")
+            events.put({"type": "step", "key": key, "status": status, "detail": detail})
+
+        # 注意：人工修正的文献要写进 ctx_prev 本身。
+        # 之前写的是 ctx_prev = dict(...) 的副本，等于白改 ——
+        # 续跑时编排器从 synthesize 开始，会直接复用旧的 papers，改动被丢掉。
+        if papers_override:
+            ctx_prev["papers"] = papers_override
+        runner = wf.WorkflowRunner(plan, on_step=on_step, should_stop=should_stop)
+        db.update_workflow_status(workflow_id, "running")
+
+        def run_pipeline():
+            try:
+                runner.run(start_from=start_from, previous=ctx_prev,
+                           previous_state=state_prev)
+            except Exception as e:  # noqa: BLE001 - 异常要送回生成器
+                error_box["error"] = f"{type(e).__name__}: {str(e)[:300]}"
+                db.update_workflow_status(workflow_id, "failed")
+            finally:
+                events.put(None)      # 结束哨兵
+
+        threading.Thread(target=run_pipeline, daemon=True).start()
+
+        # 边跑边推。每收到一步就立刻下发，前端面板随即更新。
+        while True:
+            ev = events.get()
+            if ev is None:
+                break
+            yield sse_pack(ev).encode("utf-8")
+
+        if error_box.get("error"):
+            yield sse_pack({"type": "error", "message": error_box["error"]}).encode("utf-8")
+
+        snap = runner.snapshot()
+        ctx = {
+            "papers": runner.ctx.get("papers") or [],
+            "stats": runner.ctx.get("stats"),
+            "synth": runner.ctx.get("synth"),
+        }
+        report = (runner.ctx.get("format") or {}).get("report", "")
+        db.save_workflow_result(workflow_id, ctx, report)
+
+        failed = [s for s in snap["steps"] if s["status"] == "failed"]
+        interrupted = any(s["status"] == "interrupted" for s in snap["steps"])
+        final = "interrupted" if interrupted else ("partial" if failed else "done")
+        db.update_workflow_status(workflow_id, final)
+
+        with _RUNNING_LOCK:
+            _RUNNING.pop(workflow_id, None)
+
+        yield sse_pack({"type": "snapshot", **snap}).encode("utf-8")
+        yield sse_pack({"type": "done", "status": final,
+                        "workflow_id": workflow_id}).encode("utf-8")
+
+    return Response(generate(), headers={
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    }, mimetype="text/event-stream", direct_passthrough=True)
+
+
+@app.get("/api/workflow/<int:workflow_id>")
+@login_required
+def get_workflow(workflow_id):
+    """读工作流状态（仅本人）。
+
+    这里**故意不做"读不到就按 id 兜底再读一次"** ——
+    工作流 id 是自增的（1、2、3…），任何人都能猜。
+    兜底那次查询不带 user_id，等于匿名就能把别人整份报告、检索式、
+    文献列表读走。这和之前"整目录托管 static 导致 /app.py 可下载"
+    是同一类漏洞，所以四个工作流接口统一要求登录且校验归属。
+    """
+    row = db.get_workflow(workflow_id, session["user_id"])
+    if not row:
+        return jsonify({"success": False, "error": "工作流不存在"}), 404
+    return jsonify({"success": True, "workflow": _wf_state_payload(row)})
+
+
+@app.post("/api/workflow/<int:workflow_id>/interrupt")
+@login_required
+def interrupt_workflow(workflow_id):
+    """请求中断。
+
+    编排器在每次步骤内汇报进度时都会查这个标志，所以批处理中的长步骤
+    （分批抽取、多节综述）也能被打断；已经跑完的步骤保持 done 不丢，
+    中断标记落在"本来要开始却没开始"的那一步上，续跑即以它为起点。
+    """
+    with _RUNNING_LOCK:
+        if workflow_id in _RUNNING:
+            _RUNNING[workflow_id] = True
+            return jsonify({"success": True, "message": "已请求中断，将在当前步骤结束后停止"})
+    return jsonify({"success": True, "message": "该工作流当前没有在运行"})
+
+
+@app.delete("/api/workflow/<int:workflow_id>")
+@login_required
+def remove_workflow(workflow_id):
+    if db.delete_workflow(workflow_id, session["user_id"]):
+        return jsonify({"success": True, "message": "已删除"})
+    return jsonify({"success": False, "error": "工作流不存在"}), 404
+
+
 @app.get("/api/health")
 def health():
     return jsonify({"status": "ok"})
@@ -1032,11 +1434,8 @@ def health():
 # ═══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    try:
-        db.init_db()
-        print("✅ 数据库已就绪")
-    except Exception as e:
-        print(f"⚠️ 数据库初始化警告: {e}")
+    # 建表已经在导入时做过了（见上面的 db.init_db()），这里不再重复调用，
+    # 免得日志里出现两遍"数据库初始化完成"。
 
     if not os.getenv("DEEPSEEK_API_KEY"):
         raise RuntimeError(
@@ -1044,9 +1443,22 @@ if __name__ == "__main__":
             "DEEPSEEK_API_KEY=sk-xxx"
         )
 
+    host = (os.getenv("APP_HOST") or "127.0.0.1").strip()
+    try:
+        port = int(os.getenv("APP_PORT") or "8000")
+    except ValueError:
+        port = 8000
+
     print("=" * 50)
     print("   📚 学术文献检索助手")
-    print(f"   🌐 http://127.0.0.1:8000")
+    print(f"   🌐 本机 http://127.0.0.1:{port}")
+    # 把账号存放在哪儿打出来：用户不用猜"我的账号到底存在哪"
+    print(f"   🗄  账号数据库: {db.DB_PATH}")
+    print(f"   🧾 账号备份:   {db.ACCOUNTS_FILE}")
+    if PUBLIC_PASSWORD:
+        print("   🔒 已启用公网访问口令（PUBLIC_PASSWORD）")
     print("=" * 50)
 
-    app.run(host="127.0.0.1", port=8000, debug=True, threaded=True, use_reloader=False)
+    # 端口可用 APP_PORT 覆盖：natapp 这类内网穿透转发的是**隧道里配置的那个
+    # 本地端口**，如果隧道填的是 80，就用 APP_PORT=80 启动本服务去对齐。
+    app.run(host=host, port=port, debug=True, threaded=True, use_reloader=False)

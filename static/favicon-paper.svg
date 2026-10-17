@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="学术文献检索">
+  <title>学术文献检索 · 折角文稿</title>
+  <!--
+    favicon 专用版：和 logo-paper.svg 是同一个标记，为 32px 做了三处调整 ——
+      1) 圆角浅色底：标签页背景有深有浅，有底色才不会糊进背景；
+      2) 正文只留 2 条横线（3 条在 16px 下会连成一块灰）；
+      3) 笔画相对加粗、图形填满画布（留白太多在标签页里显得很小）。
+  -->
+  <rect width="32" height="32" rx="7.5" fill="#eef4ff"/>
+
+  <!-- 页身（右上留折角缺口） -->
+  <path d="M6.5 5.5 H 19 L 23.5 10 V 25.5 H 6.5 Z"
+        fill="none" stroke="#1a2a6c" stroke-width="2.2"
+        stroke-linejoin="round" stroke-linecap="round"/>
+
+  <!-- 折角 -->
+  <path d="M19 5.5 Q 19.4 8 23.5 10" fill="none" stroke="#4f7df3" stroke-width="1.9"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- 正文横线 -->
+  <g stroke="#7aa5f0" stroke-width="1.9" stroke-linecap="round" fill="none">
+    <path d="M10 13 H 18.5"/>
+    <path d="M10 17.5 H 18.5"/>
+  </g>
+
+  <!-- 放大镜，盖住右下角 -->
+  <circle cx="22.4" cy="22.4" r="6" fill="#eef4ff"/>
+  <circle cx="22.4" cy="22.4" r="6" fill="none" stroke="#1a2a6c" stroke-width="2"/>
+  <path d="M26.8 26.8 L 29.4 29.4" stroke="#1a5fd0" stroke-width="3" stroke-linecap="round" fill="none"/>
+</svg>

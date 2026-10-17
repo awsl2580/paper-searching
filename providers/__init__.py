@@ -24,20 +24,51 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
+from providers import crossref as _crossref
+from providers import doaj as _doaj
+from providers import europepmc as _europepmc
 from providers import openalex as _openalex
 from providers import semantic_scholar as _s2
-from providers.base import ProviderError, dedup_key, split_id
+from providers.base import ProviderError, dedup_key, register_id_prefixes, split_id
 
 # 注册表：新增数据源只需要在这里加一行
 SOURCES = {
     _s2.provider.name: _s2.provider,
     _openalex.provider.name: _openalex.provider,
+    _crossref.provider.name: _crossref.provider,
+    _europepmc.provider.name: _europepmc.provider,
+    _doaj.provider.name: _doaj.provider,
 }
 
+# 让 split_id 认得这些前缀，否则收藏/详情里的 "<source>:<id>" 会被当成标题，
+# 悄悄退化成"按标题搜一篇"（不报错，但行为不对）。
+register_id_prefixes(SOURCES.keys())
+
 # 每个语种分组下，按优先级排列的 (provider 名, language 过滤)
+#
+# 选源依据（都是实测结论，不是照抄文档）：
+#   en  Semantic Scholar  覆盖广、带引用图谱，但公共配额常 429
+#       OpenAlex          稳、免费、元数据干净（保底）
+#       Crossref          **卷期页码最全**，GB/T 7714 参考文献靠它补全
+#       Europe PMC        生命科学/生物医学最全，而且**带被引次数**
+#       DOAJ              只收开放获取期刊，用来判断"能不能免费读全文"
+#
+#   cn  OpenAlex          language:zh 过滤，目前唯一稳定的中文元数据源
+#       Crossref          中文期刊只要有 DOI 就有卷期页，补中文参考文献
+#
+# 注意 en 组现在是 5 个源并发。每轮检索都会打 5 个接口，所以：
+#   * 每个源各自有节流+缓存（见 providers/http.py），重复检索基本零成本；
+#   * 跨源去重按 DOI/标题做（dedup_key），多源命中同一篇不会重复展示；
+#   * 单个源失败只记 warning，不影响整轮结果。
 GROUPS = {
-    "en": [("semantic_scholar", None), ("openalex", None)],
-    "cn": [("openalex", "zh")],
+    "en": [
+        ("semantic_scholar", None),
+        ("openalex", None),
+        ("crossref", None),
+        ("europepmc", None),
+        ("doaj", None),
+    ],
+    "cn": [("openalex", "zh"), ("crossref", "zh")],
 }
 
 # 检索结果里的摘要截断长度：给模型看的，太长纯浪费 token
@@ -103,10 +134,18 @@ def impact_score(paper, now=None):
 
 
 def _annotate_and_sort(papers, now=None):
-    """给每篇打上排序分，然后按 相关度 -> 综合分 排序（稳定，并列保持原顺序）。
+    """给每篇打上排序分，然后按 词覆盖 -> 相关度 -> 综合分 排序（稳定，并列保持原顺序）。
 
     为什么相关度优先：如果只看被引和年份，一篇高被引但跑题的论文会排到最前，
     用户反而更难用。相关度是门槛，影响力是门槛内的次序。
+
+    为什么"词覆盖"排在相关度前面：多词查询下，2-gram 百分比会被通用二字组合
+    （"图像""网络"）刷高。实测查"图神经网络 遥感图像 语义分割"，
+    《基于特征对齐…可见光-红外装甲车辆检测方法》只命中"图像"就有 15 分，
+    而真正对题的《…遥感图像语义分割网络》命中 2 个整词。
+    先比"命中几个查询词"，这些靠通用字凑分的自然沉到底下。
+    用的是**加权**词分（整词 1 分、部分命中 0.5 分），
+    这样"遥感图像+语义分割"两个整词能压过"图神经网络"的部分命中。
     """
     for p in papers:
         total, c, r = impact_score(p, now)
@@ -115,7 +154,8 @@ def _annotate_and_sort(papers, now=None):
         p["recencyScore"] = r
     return sorted(
         papers,
-        key=lambda p: (-(p.get("relevance") if isinstance(p.get("relevance"), (int, float)) else 0),
+        key=lambda p: (-((p.get("relevanceDetail") or {}).get("word_score") or 0),
+                       -(p.get("relevance") if isinstance(p.get("relevance"), (int, float)) else 0),
                        -p["impactScore"]),
     )
 
@@ -143,10 +183,14 @@ def _plan_for(source, query=""):
         return "en", list(GROUPS["en"])
 
     if _has_cjk(query):
-        # 中文查询："全部"里真正能贡献结果的只有 OpenAlex
-        return "all", [("openalex", "zh")]
+        # 中文查询：只跑"能返回中文文献"的源。
+        # 不把欧洲的英文源也拉进来 —— 中文检索式丢给 DOAJ/Europe PMC 只会
+        # 返回一堆字面命中的英文论文，把真正相关的中文文献挤出前面（实测过）。
+        # Crossref 保留：中文期刊只要有 DOI 就有卷期页，正好补参考文献字段。
+        return "all", [("openalex", "zh"), ("crossref", "zh")]
     # all：英文源各一路 + 中文源各一路（openalex 走 zh 过滤，不再重复跑一遍全库）
-    return "all", [("semantic_scholar", None), ("openalex", "zh")]
+    return "all", [("semantic_scholar", None), ("openalex", None),
+                   ("crossref", None), ("europepmc", None), ("doaj", None)]
 
 
 def source_status():
@@ -165,7 +209,7 @@ def source_status():
 
 def clear_cache():
     """清空所有源的结果缓存。"""
-    for module in (_s2, _openalex):
+    for module in (_s2, _openalex, _crossref, _europepmc, _doaj):
         module.client.clear_cache()
 
 
@@ -185,30 +229,6 @@ def _search_one(name, language, query, limit, offset=0):
     except Exception as e:  # noqa: BLE001 - 单源崩溃不该拖垮整轮检索
         return name, [], ProviderError(f"{type(e).__name__}: {e}", kind="exception", source=name)
 
-
-def _merge(results, limit):
-    """按来源轮流取，保证中英文都有机会进最终结果；同一篇论文只留一份。
-
-    去重靠 DOI + 规范化标题（见 base.dedup_key）——中文文献经常没有 DOI，
-    所以标题去重是必需的，否则中英文库里的同一篇会重复出现。
-    """
-    queues = [list(papers) for papers in results if papers]
-    merged = []
-    seen = set()
-    while queues and len(merged) < limit:
-        for q in list(queues):
-            if not q:
-                queues.remove(q)
-                continue
-            paper = q.pop(0)
-            key = dedup_key(paper)
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(paper)
-            if len(merged) >= limit:
-                break
-    return merged
 
 
 def _warning_for(error):
@@ -232,6 +252,59 @@ def _warning_for(error):
 # 但评委/用户问一句"为什么这篇 62 分"就答不上来了。覆盖率的依据是
 # 可以逐词展示的（哪些词命中、哪些没命中），而且不需要额外模型调用。
 
+def _query_words(query):
+    """按空格/标点切出查询词。
+
+    为什么需要它：规划器给出的中文检索式是**带空格的词**
+    （"图神经网络 遥感图像 语义分割"），而 `_query_terms` 会把整串按
+    2-gram 切碎，于是"图像""网络"这种通用二字组合也能拿分 ——
+    实测查"图神经网络 遥感图像 语义分割"时，
+    《基于特征对齐…可见光-红外装甲车辆检测方法》只因为标题里有"图像"
+    就拿到 15 分，挤进了前 20。
+    按词看就干净了：这篇一个查询词都不命中。
+    """
+    return [w.strip() for w in re.split(r"[\s,，、;；/|]+", query or "") if w.strip()]
+
+
+def _word_hit(word, text, body):
+    """查询词的命中强度：1.0 整词命中标题 / 0.5 标题里部分命中 / 0.2 只在摘要里。
+
+    中文长词允许退一步，但**必须命中词首二字**。这条限制是补出来的：
+
+    原来只用"2-gram 覆盖率 >= 0.6"判部分命中，于是查「图神经网络」时，
+    标题里只要有「神经网络」就算 0.5 分（4 个 2-gram 里命中 3 个 = 75%）。
+    实测后果：接上 Crossref 后，一批和主题无关的论文靠这个 0.5 混进了结果 ——
+        《基于U-Net 神经网络的禽翅图像分割方法》
+        《基于细胞神经网络的图像分割及其在医学图像中的应用》
+        《一种基于脉冲耦合神经网络的植物胚性细胞图像分割》
+    词分都是 0.5 > 0，于是没被"零整词命中"那一档过滤掉，一路进了综述。
+    加上"词首二字必须命中"（图神经网络 -> 图神）后，这三篇降到 0 分被剔除，
+    而真正对题的（如《…卷积神经网络的高分遥感影像分类》命中"遥感"）不受影响。
+
+    为什么是词首而不是别的位置：长中文术语的**头部**才是把它和其他词区分开的部分，
+    尾部（神经网络）往往是上位概念，命中它不代表命中了这个词。
+
+    顺序很关键：**先判摘要、再判标题里的部分命中**。
+    原来把摘要放在最后，而部分命中那段在标题为空时会 `return 0.0` 提前返回，
+    于是"只在摘要里命中"的中文词永远拿不到 0.2 —— 这一档等于失效。
+    这个 bug 是被 tests/test_new_sources.py 里"摘要里命中给 0.2"那条用例抓出来的。
+    """
+    wl = word.lower()
+    if wl in text:
+        return 1.0
+    if wl in body:
+        return 0.2
+    if re.fullmatch(r"[\u4e00-\u9fff]+", word) and len(word) > 2:
+        # 标题里的部分命中：必须命中词首二字，否则尾部的上位概念不算命中
+        if word[:2] not in text:
+            return 0.0
+        grams = [word[i:i + 2] for i in range(len(word) - 1)]
+        cov = sum(1 for g in grams if g in text) / len(grams)
+        if cov >= 0.6:
+            return 0.5
+    return 0.0
+
+
 def _query_terms(query):
     """把查询切成可匹配的词。
 
@@ -249,11 +322,15 @@ def _query_terms(query):
     return list(dict.fromkeys(terms))
 
 
-def score_relevance(paper, terms):
+def score_relevance(paper, terms, words=None):
     """返回 (0-100 的分数, 明细)。
 
     计分规则（刻意保持简单可解释）：标题命中算满权，只在摘要/主题词里
     命中算半权。全部查询词都在标题里 = 100 分。
+
+    多词查询（"图神经网络 遥感图像 语义分割"）额外算一层**词覆盖**：
+    命中几个查询词。这一层不参与百分比，而是决定排序档位 ——
+    命中 2 个词的必须排在只命中 1 个词的前面，哪怕后者 2-gram 分数更高。
     """
     if not terms:
         return 100, {"title_hits": [], "abstract_hits": [], "missing": []}
@@ -267,10 +344,24 @@ def score_relevance(paper, terms):
     covered = set(title_hits) | set(body_hits)
 
     score = round(100 * (2 * len(title_hits) + len(body_hits)) / (2 * len(terms)))
+
+    words = words or []
+    word_hits, word_missing, word_score = [], [], 0.0
+    for w in words:
+        hit = _word_hit(w, title, body)
+        word_score += hit
+        (word_hits if hit > 0 else word_missing).append(w)
+
     return score, {
         "title_hits": title_hits,
         "abstract_hits": body_hits,
         "missing": [t for t in terms if t not in covered],
+        "words": words,
+        "word_hits": word_hits,
+        "word_missing": word_missing,
+        "word_count": len(words),
+        "word_hit_count": len(word_hits),
+        "word_score": round(word_score, 2),
     }
 
 
@@ -282,8 +373,9 @@ def _apply_relevance(papers, query, min_relevance=0):
     这时候全删掉只会让用户空手而归，不如原样给出。
     """
     terms = _query_terms(query)
+    words = _query_words(query)
     for p in papers:
-        score, detail = score_relevance(p, terms)
+        score, detail = score_relevance(p, terms, words)
         p["relevance"] = score
         p["relevanceDetail"] = detail
 
@@ -293,9 +385,28 @@ def _apply_relevance(papers, query, min_relevance=0):
         if kept:
             return kept, len(papers) - len(kept), threshold
 
-    # 默认行为：剔除"标题和摘要里一个查询词都没命中"的，但必须留下东西
-    kept = [p for p in papers if p["relevance"] > 0]
-    if kept and len(kept) < len(papers):
+    # 默认过滤分两档，**必须放在同一段里依次尝试**：
+    # 早先写成"第一档命中就直接 return"，结果第二档永远走不到 ——
+    # 大词分数 > 0 的论文先被第一档保住，第二档就没机会把它剔掉。
+    #
+    #   第一档：标题/摘要里一个 2-gram 都没命中 -> 明显无关
+    #   第二档：多词查询下，一个**整词**都没命中 -> 靠"图像""网络"
+    #          这类通用二字组合凑分的跑题文献（实测《…可见光-红外装甲车辆
+    #          检测方法》只因为标题里有"图像"就有 15 分）
+    #
+    # 每一档都保留兜底：全被剔除时退回上一档，宁可多给也不能空手。
+    candidates = [papers, [p for p in papers if p["relevance"] > 0]]
+    multi = bool(papers) and all(
+        (p.get("relevanceDetail") or {}).get("word_count", 0) > 1 for p in papers)
+    if multi:
+        candidates.append([p for p in papers
+                           if (p.get("relevanceDetail") or {}).get("word_hit_count", 0) > 0])
+
+    kept = papers
+    for cand in candidates[1:]:
+        if cand:
+            kept = cand
+    if len(kept) < len(papers):
         return kept, len(papers) - len(kept), 1
     return papers, 0, 0
 
@@ -485,16 +596,18 @@ def get_detail(paper_id):
 
 
 def by_title(title):
-    """按标题找一篇：中文标题先问 OpenAlex，英文标题先问 Semantic Scholar。"""
+    """按标题找一篇：中文标题先问中文覆盖好的源，英文标题先问有精确匹配端点的源。"""
     title = (title or "").strip()
     if not title:
         return json.dumps({"error": "请提供论文标题"}, ensure_ascii=False)
 
     errors = []
-    # 中文标题先问 OpenAlex（它能按中文检索），英文标题先问 Semantic Scholar
-    # （它有 /paper/search/match 精确匹配端点）
+    # 中文标题：OpenAlex / Crossref 都能按中文检索；
+    # 英文标题：S2 有 /paper/search/match 精确匹配端点，排第一，
+    # 其次 Crossref（query.bibliographic 基本就是按标题匹配，命中率高）。
     has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in title)
-    order = ("openalex", "semantic_scholar") if has_cjk else ("semantic_scholar", "openalex")
+    order = (("openalex", "crossref", "semantic_scholar") if has_cjk
+             else ("semantic_scholar", "crossref", "openalex"))
 
     for name in order:
         provider = SOURCES[name]

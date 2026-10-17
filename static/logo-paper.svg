@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="学术文献检索">
+  <title>学术文献检索 · 折角文稿</title>
+  <!--
+    标记含义：折角文稿 = 论文；正文横线 = 文字内容；右下放大镜 = 检索。
+
+    为什么换掉上一版（镜片里三个节点连成的三角网络）：抽象程度太高，
+    第一眼看不出和论文有关。折角（dog-ear）+ 横线是最通用的"文档"符号，
+    缩到 16px 也能认出来。
+
+    构图取舍（前几稿踩过的坑，写下来免得再犯）：
+    · 放大镜压在**右下角上**、把角整个盖住。试过"只擦到边框"的版本：
+      镜片切掉页角后，右下边框中留一小截断头，像画坏了。盖住整角之后，
+      伸进镜片的线都被压住，留在外面的都是完整的边，才读成
+      "一张纸 + 一个盖在上面的镜片"。
+    · 镜片不能太大。试过 r=11 盖在 43,43：纸张下边缘被吃掉大半，
+      剩下的部分像一条细横线，整张纸就散了。缩到 r=9.6、往外挪一点，
+      重叠只占纸宽的四分之一左右，纸的完整性就保住了。
+    · 页面往右上收、四周留边，别贴着左边缘（第一稿重心是歪的）。
+    · 手柄留边距，顶到画布边缘在 favicon 上会被裁掉。
+    · 折角**只画一条平滑曲线**，不要额外加半透明折痕线 ——
+      加折痕会在角上填出一个实心浅蓝三角，像插了面小旗子。
+
+    纯色、纯描边、无渐变无位图。配色取自界面本身：
+      页身/镜圈 #1a2a6c、折角 #4f7df3、正文横线 #7aa5f0、手柄 #1a5fd0。
+  -->
+
+  <!-- 页身：左上起笔，绕一圈，右上是折角缺口 -->
+  <path d="M11 9
+           H 37
+           L 45 17
+           V 47
+           H 11
+           Z"
+        fill="none" stroke="#1a2a6c" stroke-width="3.2"
+        stroke-linejoin="round" stroke-linecap="round"/>
+
+  <!-- 折角：一条平滑的翻折前沿 -->
+  <path d="M37 9 Q 37.6 13.6 45 17" fill="none" stroke="#4f7df3" stroke-width="2.6"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- 正文横线 -->
+  <g stroke="#7aa5f0" stroke-width="2.6" stroke-linecap="round" fill="none">
+    <path d="M17 23 H 34"/>
+    <path d="M17 29.5 H 34"/>
+    <path d="M17 36 H 29"/>
+  </g>
+
+  <!-- 放大镜：盖住页面右下角 -->
+  <circle cx="44.5" cy="44.5" r="9.6" fill="#eef4ff"/>
+  <circle cx="44.5" cy="44.5" r="9.6" fill="none" stroke="#1a2a6c" stroke-width="2.8"/>
+  <path d="M51.4 51.4 L57 57" stroke="#1a5fd0" stroke-width="4.2" stroke-linecap="round" fill="none"/>
+</svg>

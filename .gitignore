@@ -24,6 +24,33 @@ literature.db
 *.db-wal
 *.db-shm
 
+# 账号备份（database.export_accounts 生成）。
+#
+# **这个文件要进版本库**，和 literature.db 的处理相反 —— 两者目的不同：
+#   literature.db  二进制、体积大、含全部业务数据（收藏/对话/工作流），不适合进库
+#   accounts.json  只有账号名 + bcrypt 哈希，很小，正是为了"账号跟着项目走"
+#
+# 它存在的意义就是：换台机器、换个目录、或者库文件丢了，账号还能恢复。
+# 如果把它也忽略掉，这个设计就完全失效了（登录时会先查 literature.db，
+# 再查这份文件），所以这里**故意不**加进忽略列表。
+#
+# 安全上可以接受：password 字段是 bcrypt 哈希，不是明文密码；
+# 而且能读到这份文件的人本来也能读到整个仓库。
+# 唯一的写入临时文件仍忽略：
+accounts.json.tmp
+
+# 测试跑出来的临时库（tests/ 下的用例会建这些文件）
+tests/_tmp_*.db
+
+# pip 在**当前工作目录**留下的临时目录（PyCharm/IDE 里装依赖时会出现，空的）
+pip-build-tracker-*
+pip-ephem-wheel-cache-*
+pip-install-*
+pip-unpack-*
+
+# 真机跑出来的报告产物
+tests/live_report.md
+
 # OS
 .DS_Store
 Thumbs.db

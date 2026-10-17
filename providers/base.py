@@ -227,6 +227,28 @@ def qualify(source, raw_id):
     return f"{source}:{raw_id}"
 
 
+# 已知的 id 前缀（= provider name）。由聚合层在注册 SOURCES 后调用
+# register_id_prefixes() 填进来，避免在这里硬编码一份会过期的名单 ——
+# 之前就是硬编码的，加了新源之后 split_id 认不出 "crossref:10.xxx"，
+# 于是"按 id 取详情"悄悄退化成"按标题搜一篇"，行为不对还不报错。
+_KNOWN_PREFIXES = (
+    "semantic_scholar", "openalex",
+    # wanfang 留着是为了向后兼容：历史收藏里若存过带授权的万方 id，
+    # 仍能路由回去（目前没有接入）
+    "wanfang",
+)
+
+
+def register_id_prefixes(names):
+    """把 provider 名字注册成可识别的 id 前缀（聚合层启动时调用）。"""
+    global _KNOWN_PREFIXES
+    merged = list(_KNOWN_PREFIXES)
+    for n in names:
+        if n and n not in merged:
+            merged.append(n)
+    _KNOWN_PREFIXES = tuple(merged)
+
+
 def split_id(paper_id):
     """拆解 id -> (source, raw_id)。
 
@@ -246,9 +268,7 @@ def split_id(paper_id):
     if pid.startswith("s2:"):
         return "semantic_scholar", pid[len("s2:"):]
 
-    # wanfang 留在列表里是为了向后兼容：万一以后重新接入带授权的中文源，
-    # 历史收藏里已经存下的这类 id 仍然能路由回去
-    for known in ("semantic_scholar", "openalex", "wanfang"):
+    for known in _KNOWN_PREFIXES:
         prefix = known + ":"
         if pid.startswith(prefix):
             return known, pid[len(prefix):]
@@ -290,6 +310,37 @@ def _clean_venue(value):
     return re.sub(r"\s{2,}", " ", text).strip()
 
 
+def _str_list(values, limit=None):
+    """把来源给的列表洗成纯字符串列表。
+
+    为什么必须洗：不同源的同名字段类型不一致，实测踩到的 ——
+    Europe PMC 的 pubTypeList.pubType 有时是 ["Journal Article"]，
+    有时是 [{"code": "..."}]；OpenAlex 的 concepts 是 [{"display_name": ...}]。
+    直接把它们塞进 fieldsOfStudy，下游 `" ".join(fieldsOfStudy)`
+    就会抛 `TypeError: expected str instance, dict found` —— 整轮检索挂掉。
+    类型这类事应该在边界上一次性处理掉，不要让每个消费者各自防御。
+    """
+    out = []
+    for v in values or []:
+        if isinstance(v, str):
+            text = v.strip()
+        elif isinstance(v, dict):
+            # 常见的名字字段，按可能性依次取
+            text = ""
+            for key in ("display_name", "name", "title", "value", "code", "label"):
+                candidate = v.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    text = candidate.strip()
+                    break
+        else:
+            text = ""
+        if text and text not in out:
+            out.append(text)
+        if limit and len(out) >= limit:
+            break
+    return out
+
+
 def normalize_paper(raw, *, source, source_label, language=""):
     """把 provider 拼好的 dict 补齐成统一结构，缺的字段给安全默认值。"""
     p = dict(raw or {})
@@ -312,7 +363,7 @@ def normalize_paper(raw, *, source, source_label, language=""):
         "doi": (p.get("doi") or "").strip(),
         "citationCount": p.get("citationCount") or 0,
         "referenceCount": p.get("referenceCount"),
-        "fieldsOfStudy": [f for f in (p.get("fieldsOfStudy") or []) if f],
+        "fieldsOfStudy": _str_list(p.get("fieldsOfStudy")),
         "openAccessPdf": p.get("openAccessPdf") or "",
         # 有 PDF 直链就算有免费全文；isOa 由各 provider 按自己的字段判断
         "isOa": bool(p.get("isOa") or p.get("openAccessPdf")),

@@ -4,7 +4,6 @@
 使用 Semantic Scholar API（免费无需 API Key）+ DeepSeek 大模型。
 """
 
-import json
 import os
 import sys
 import subprocess
@@ -104,10 +103,12 @@ def get_paper_detail(paper_id: str) -> str:
 if not os.getenv("DEEPSEEK_API_KEY"):
     raise RuntimeError("DEEPSEEK_API_KEY 未设置。请设置环境变量或在 .env 文件中配置。")
 
-# 模型名可用 DEEPSEEK_MODEL 覆盖（默认 deepseek-chat，与 Web 版一致）。
-# 说明见 app.py 里 DEEPSEEK_MODEL 的注释：该别名当前由 DeepSeek-V4.1-Flash
-# 承接，且走非思考模式，因此不会有收不到的 reasoning_content。
-DEEPSEEK_MODEL = (os.getenv("DEEPSEEK_MODEL") or "").strip() or "deepseek-chat"
+# 模型名可用 DEEPSEEK_MODEL 覆盖（与 app.py / workflow.py 共用同一个变量，
+# 保证命令行版和 Web 版不会各用一个模型）。默认 deepseek-flash，
+# 说明见 app.py 里 DEEPSEEK_MODEL 的注释。
+# 注意：CLI 版是**同步打印**结果、没有流式状态提示，用思考模型时
+# 会先静默几十秒再出内容。命令行下想快点就用 deepseek-chat。
+DEEPSEEK_MODEL = (os.getenv("DEEPSEEK_MODEL") or "").strip() or "deepseek-flash"
 
 llm = ChatDeepSeek(model=DEEPSEEK_MODEL, temperature=0)
 agent = create_agent(
