@@ -3,6 +3,8 @@
 启动时自动检查并安装缺失依赖。
 """
 
+
+
 import os
 import sys
 import subprocess
