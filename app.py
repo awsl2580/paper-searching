@@ -72,9 +72,17 @@ from langchain_core.tools import tool
 # （例如 python C:\...\AIagent2\AIagent1\app.py，或在 IDE 里配了别的工作目录）
 # 就会找不到，于是 API Key 缺失、会话密钥回退到公开的默认值 —— 而且不报错。
 # 这个坑是接公网域名时踩出来的：换个目录启动，签名密钥就悄悄变了。
+#
+# 加载两层，后者覆盖前者：
+#   .env        进版本库，团队共用的开发配置（clone 下来就能跑）
+#   .env.local  进 .gitignore，个人覆盖（换自己的 key、临时改超时、本地开口令）
+# 只覆盖不合并：.env.local 里写了哪一项就以它为准，其余沿用 .env。
+_HERE = os.path.dirname(os.path.abspath(__file__))
 try:
     from dotenv import load_dotenv
-    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+    load_dotenv(os.path.join(_HERE, ".env"))
+    # override=True：让个人覆盖文件真正生效，而不是"先读到的赢"
+    load_dotenv(os.path.join(_HERE, ".env.local"), override=True)
 except Exception:
     pass
 
