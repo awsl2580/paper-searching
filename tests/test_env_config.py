@@ -115,12 +115,15 @@ try:
     ok("提示里给了申请地址", "platform.deepseek.com" in msg)
 
     # ── 2. 写入 .env.local：Key 生效 ────────────────────────
-    FAKE = "sk-testonly1234567890"
+    # 这个"假 key"在运行时拼出来，源码里不放形如 sk-xxxx 的字面量 ——
+    # 否则 GitHub 的密钥扫描、各类 secret scanner 会把它当成真 key 报警，
+    # 白白制造噪音（本仓库真的因为一次密钥泄露吃过亏，这类误报很误导人）。
+    FAKE = "sk-" + "test" * 5
     io.open(LOCAL, "w", encoding="utf-8", newline="\n").write(
         f"DEEPSEEK_API_KEY={FAKE}\nAPI_TIMEOUT=77\n")
     b = probe("有 .env.local：Key 生效并覆盖超时")
     ok("Key 来自 .env.local", b.get("KEY_LEN") == str(len(FAKE)), b.get("KEY_LEN"))
-    ok("Key 内容正确（尾部=7890）", b.get("KEY_TAIL") == "7890", b.get("KEY_TAIL"))
+    ok("Key 内容正确（尾部=test）", b.get("KEY_TAIL") == "test", b.get("KEY_TAIL"))
     ok(".env.local 覆盖了 API_TIMEOUT", b.get("TIMEOUT") == "77", b.get("TIMEOUT"))
     ok("未覆盖的项仍来自 .env（模型名）", b.get("MODEL") == "deepseek-flash", b.get("MODEL"))
     ok("两个文件都被加载", b.get("LOADED") == ".env,.env.local", b.get("LOADED"))
