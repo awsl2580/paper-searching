@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-10-17T20:09:52",
+  "updated_at": "2026-10-21T12:54:37",
   "note": "由 database.export_accounts() 自动生成；password 是 bcrypt 哈希，不是明文。删掉本文件不影响已存在的 literature.db，但换目录/换机器时就找不回账号了。",
   "accounts": [
     {

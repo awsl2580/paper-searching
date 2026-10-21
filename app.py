@@ -65,26 +65,13 @@ from langchain.agents import create_agent
 from langchain_deepseek import ChatDeepSeek
 from langchain_core.tools import tool
 
-# 自动加载 .env（如果存在）
-#
-# 这里**必须用绝对路径**，不能用裸 load_dotenv()：
-# 裸调用是按"当前工作目录"向上找 .env 的，从别处执行
-# （例如 python C:\...\AIagent2\AIagent1\app.py，或在 IDE 里配了别的工作目录）
-# 就会找不到，于是 API Key 缺失、会话密钥回退到公开的默认值 —— 而且不报错。
-# 这个坑是接公网域名时踩出来的：换个目录启动，签名密钥就悄悄变了。
-#
-# 加载两层，后者覆盖前者：
-#   .env        进版本库，团队共用的开发配置（clone 下来就能跑）
-#   .env.local  进 .gitignore，个人覆盖（换自己的 key、临时改超时、本地开口令）
-# 只覆盖不合并：.env.local 里写了哪一项就以它为准，其余沿用 .env。
-_HERE = os.path.dirname(os.path.abspath(__file__))
-try:
-    from dotenv import load_dotenv
-    load_dotenv(os.path.join(_HERE, ".env"))
-    # override=True：让个人覆盖文件真正生效，而不是"先读到的赢"
-    load_dotenv(os.path.join(_HERE, ".env.local"), override=True)
-except Exception:
-    pass
+# 加载环境变量（.env → .env.local，后者覆盖前者）。
+# 时间点很关键：必须在这之后的所有 `os.getenv(...)` 之前完成，
+# 所以放在模块顶层、紧跟 import 之后。
+# 细节见 envconfig.py —— 三个入口（app.py / Agent.py / live 脚本）共用它，
+# 避免"从一个目录启动读不到配置"这类坑各修各的。
+import envconfig       # noqa: E402
+envconfig.load_env_files()
 
 TIMEOUT = int(os.getenv("API_TIMEOUT", "30"))
 S2_USER_AGENT = os.getenv("S2_USER_AGENT", "LiteratureSearchAssistant/1.0 (personal research tool)")
@@ -1447,11 +1434,15 @@ if __name__ == "__main__":
     # 建表已经在导入时做过了（见上面的 db.init_db()），这里不再重复调用，
     # 免得日志里出现两遍"数据库初始化完成"。
 
-    if not os.getenv("DEEPSEEK_API_KEY"):
-        raise RuntimeError(
-            "DEEPSEEK_API_KEY 未设置。请在系统环境变量中设置，或在项目根目录创建 .env 文件并写入：\n"
-            "DEEPSEEK_API_KEY=sk-xxx"
-        )
+    # API Key 不随仓库分发（.env 里是空的），缺了直接给出"写哪个文件、写什么"的提示。
+    # 这里捕获后打印成干净的一屏提示，而不是甩一段 Python traceback 给人看。
+    try:
+        envconfig.require_api_key("网页版")
+    except RuntimeError as _exc:
+        print("\n" + "=" * 64)
+        print(str(_exc))
+        print("=" * 64 + "\n")
+        sys.exit(1)
 
     host = (os.getenv("APP_HOST") or "127.0.0.1").strip()
     try:

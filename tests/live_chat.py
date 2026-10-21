@@ -9,11 +9,13 @@ import sys
 
 ROOT = r"C:\code\论文助手\AIagent2\AIagent1"
 sys.path.insert(0, ROOT)
-from dotenv import load_dotenv
-load_dotenv(os.path.join(ROOT, ".env"))
+# 用统一的加载逻辑：.env → .env.local（key 只在后者里，见 envconfig.py）
+import envconfig
+envconfig.load_env_files(ROOT)
 
 if not os.getenv("DEEPSEEK_API_KEY"):
-    print("SKIP  DEEPSEEK_API_KEY 未配置")
+    print("SKIP  没有 DEEPSEEK_API_KEY，跳过真机测试。")
+    print(f"      请写入：{envconfig.ENV_LOCAL_FILE}")
     sys.exit(0)
 
 import database as db

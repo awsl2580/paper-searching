@@ -7,9 +7,12 @@
 import os
 import sys
 import subprocess
-from dotenv import load_dotenv
 
-load_dotenv()
+# 加载 .env → .env.local（与网页版共用同一套加载逻辑，见 envconfig.py）。
+# 这里**不能**用裸 load_dotenv()：它按当前工作目录找文件，
+# 从别的目录执行 python Agent.py 时会静默读不到配置。
+import envconfig
+envconfig.load_env_files()
 
 # ── 自动检查并安装依赖 ────────────────────────────────────
 REQUIRED_PACKAGES = {
@@ -100,8 +103,15 @@ def get_paper_detail(paper_id: str) -> str:
 
 
 # ── 构建 Agent ────────────────────────────────────────────
-if not os.getenv("DEEPSEEK_API_KEY"):
-    raise RuntimeError("DEEPSEEK_API_KEY 未设置。请设置环境变量或在 .env 文件中配置。")
+# Key 不随仓库分发，缺了会给出"写到哪个文件"的提示。
+# 打印成干净的一屏，而不是甩 Python traceback。
+try:
+    envconfig.require_api_key("命令行版")
+except RuntimeError as _exc:
+    print("\n" + "=" * 64)
+    print(str(_exc))
+    print("=" * 64 + "\n")
+    sys.exit(1)
 
 # 模型名可用 DEEPSEEK_MODEL 覆盖（与 app.py / workflow.py 共用同一个变量，
 # 保证命令行版和 Web 版不会各用一个模型）。默认 deepseek-flash，

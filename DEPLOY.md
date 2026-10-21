@@ -5,6 +5,16 @@ natapp 负责"公网 → 本机"这一跳，本项目的责任是把服务跑在
 
 ## 一、两条命令
 
+**0. 先填自己的 API Key**（只需一次。Key 不随仓库分发）
+
+```bat
+cd C:\code\论文助手\AIagent2\AIagent1
+echo DEEPSEEK_API_KEY=sk-你的密钥> .env.local
+```
+
+`.env.local` 不进版本库（已在 `.gitignore` 里），只影响本机。
+漏了这步的话，下一步启动时会直接打印"该往哪个文件的哪一行写什么"。
+
 **1. 启动本站服务**（先跑起来，natapp 才有东西可转发）
 
 ```bat
@@ -64,17 +74,20 @@ C:\code\论文助手\内网穿透\run_natapp.bat
 RuntimeError: FLASK_SECRET_KEY 未设置（或仍是示例里的默认值）
 ```
 
-生成一个（在项目根目录执行，把输出那行加进 `.env`）：
+生成一个（在项目根目录执行）：
 
 ```bat
 python -c "import secrets; print('FLASK_SECRET_KEY=' + secrets.token_hex(32))"
 ```
 
+这条**写进共用的 `.env`**（团队一致，登录态才不会互相踢掉）；
+只想改本机就写 `.env.local`。
+
 ### 2. 公网口令（可选，但强烈建议）
 
 本站暴露的是**共享的 DeepSeek 额度**。域名一旦被转发出去，
 爬虫或陌生人可以反复触发检索，把费用刷掉。
-在 `.env` 里设一个共享口令即可开启门禁：
+在 `.env.local`（个人，不进库）里设一个共享口令即可开启门禁：
 
 ```
 PUBLIC_PASSWORD=你定的口令
@@ -112,7 +125,7 @@ python tests\test_exposure.py
 |------|------|
 | `ProxyFix(x_proto=1, x_host=1, x_for=1)` | 穿透工具在中间做了一层代理：浏览器访问的是 `https://xxx.natappfree.cc`，转发到本机却是 http。不加这层，Flask 以为自己是 http，生成绝对 URL 和判断 `is_secure` 都会出错 |
 | `.env` 用**绝对路径**加载 | 原来裸调 `load_dotenv()`，它按"当前工作目录"向上找。从别处启动（`python C:\...\app.py`、或在 IDE 里配了别的工作目录）就找不到，于是 API Key 缺失、会话密钥悄悄回退到公开默认值 —— 而且不报错。这个坑就是接公网时踩出来的 |
-| `.env` → `.env.local` 两层加载 | `.env` 进库给团队共用（拉下来就能跑），个人配置写 `.env.local`（不进库、覆盖同名项）。少了这层，一个人改 key 就会把所有人的配置改掉 |
+| `.env` → `.env.local` 两层加载 | `.env` 进库给团队共用（不含 API Key），个人的 Key 与本地覆盖写 `.env.local`（不进库、覆盖同名项）。少了这层，一个人改 key 就会把所有人的配置改掉 |
 | `APP_HOST` / `APP_PORT` 可配 | 隧道转发的是它自己配置的本地端口，需要让服务去对齐 |
 
 ## 五、常见故障

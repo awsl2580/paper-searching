@@ -345,33 +345,44 @@ AIagent1/
 
 ## 快速开始
 
-### 1. 配置（clone 下来通常不用动）
+### 1. 配置（只需填自己的 API Key）
 
-本仓库是**私有**的，`.env` 已经随仓库提交（团队共用的开发配置），
-里面 `DEEPSEEK_API_KEY` 和 `FLASK_SECRET_KEY` 都是配好的，**拉下来直接就能跑**，
-不需要再找人要 key。
-
-`FLASK_SECRET_KEY` 是登录态的签名密钥：**随机生成一次、之后不要改**，
-改了所有人的登录态会立即失效（需要重新登录）。
-
-需要**自己的**配置时（用自己的 key 测额度、临时改超时、本地开口令等），
-别改 `.env`（会污染别人的共用配置），新建 `.env.local` 即可 ——
-它已在 `.gitignore` 里，只覆盖你写的那几项：
+**API Key 不随仓库分发**，需要你自己写一次。在项目根目录建一个
+`.env.local`（已在 `.gitignore` 里，不会被提交），内容只需一行：
 
 ```ini
-# .env.local
-DEEPSEEK_API_KEY=sk-我自己的key
-API_TIMEOUT=60
+DEEPSEEK_API_KEY=sk-你的密钥
 ```
 
-加载顺序：`.env` → `.env.local`（后者覆盖前者，见 `app.py` 顶部）。
-这条机制有专门的用例守着：`tests/test_env_config.py`。
+密钥申请：<https://platform.deepseek.com/api_keys>
 
-`.env.example` 改成**纯文档**性质：列出全部可配置项及其含义，供查阅。
+也可以改用系统环境变量 `DEEPSEEK_API_KEY`（优先级高于文件）。
 
-> ⚠️ 以上做法成立的前提是**仓库保持 Private**。
-> 一旦转为公开，`.env` 里的两个密钥必须立即轮换 ——
-> 而且光删文件不够，它们会留在 git 历史里。
+没填就直接启动时，会看到一段能照着做的提示，而不是一堆报错：
+它会直接告诉你"在哪个文件的哪一行写什么"。
+
+**两层的分工**（加载顺序 `.env` → `.env.local`，后者覆盖前者）：
+
+| 文件 | 是否进库 | 放什么 |
+|------|----------|--------|
+| `.env` | 进（团队共用） | 模型名、超时、`FLASK_SECRET_KEY` 等**不含个人 API Key** 的配置 |
+| `.env.local` | 不进（每人自己写） | **你的** `DEEPSEEK_API_KEY`，以及你想临时改的任何项 |
+
+`FLASK_SECRET_KEY` 之所以留在共用文件里：它不是计费凭据（泄露后果是"能伪造登录"，
+而非"被刷钱"）；而且团队共用同一个值，登录态在各自环境间才一致，
+不会因为谁重新生成一次就把所有人踢下线。公网部署时建议换成自己的值。
+
+`.env.example` 是**配置文档**：列出全部可选项及含义，供查阅。
+
+加载逻辑统一在 `envconfig.py`，网页版 / 命令行版 / 真机脚本共用同一套 ——
+避免"换个目录启动就读不到配置"这类坑各修各的（`Agent.py` 原先就踩过）。
+
+这条设计有专门的用例守着（`tests/test_env_config.py`，17 项），
+因为它一旦被破坏就是密钥泄露。
+
+> ⚠️ 提交前确认 `.env` 里的 `DEEPSEEK_API_KEY` 仍然是空的。
+> 如果你曾把真实 Key 写进过 `.env` 并提交，**删掉也不够** ——
+> 它会留在 git 历史里，必须轮换密钥。
 
 ### 2. 启动
 
@@ -412,7 +423,8 @@ python tests/run_all.py
 | `test_frontend_authors.js` | 前端参考文献作者格式与后端规则一致（从 index.html 里抽真函数来跑） | 11 |
 | `test_pagination.js` | 搜索结果折叠 + 翻页、工作流"已等待秒数"接线 | 40 |
 
-三个**真机**脚本（需要 `.env` 里配好 `DEEPSEEK_API_KEY`，会真实调用模型和数据源）：
+三个**真机**脚本（需要先按「快速开始 / 配置」把 `DEEPSEEK_API_KEY` 写进 `.env.local`，
+会真实调用模型和数据源）：
 
 ```bash
 python tests/live_run.py     # 工作流全流程，约 13 秒，报告写到 tests/live_report.md
@@ -561,7 +573,7 @@ OpenAlex 的 `best_oa_location.pdf_url` 命中率不错（实测中文 OA 期刊
 
 | 变量名 | 必填 | 说明 |
 |--------|------|------|
-| `DEEPSEEK_API_KEY` | 是 | DeepSeek API 密钥 |
+| `DEEPSEEK_API_KEY` | **是（自己填）** | DeepSeek API 密钥。**不随仓库分发**，写在 `.env.local` 或系统环境变量里 |
 | `DEEPSEEK_MODEL` | 否 | 对话与工作流共用的模型，当前为 `deepseek-flash`，见下方「模型说明」 |
 | `SEMANTIC_SCHOLAR_API_KEY` | **强烈建议** | 论文检索密钥，见下方「关于限流」 |
 | `S2_MIN_INTERVAL` | 否 | S2 两次检索请求最小间隔秒数，默认 1.2 |
@@ -574,15 +586,15 @@ OpenAlex 的 `best_oa_location.pdf_url` 命中率不错（实测中文 OA 期刊
 | `OPENALEX_CACHE_TTL` | 否 | OpenAlex 缓存秒数，默认 1800 |
 | `HTTPS_PROXY` | 否 | 代理地址（国内网络不佳时使用） |
 | `API_TIMEOUT` | 否 | API 超时秒数，默认 30 |
-| `FLASK_SECRET_KEY` | 是 | Flask session 密钥；缺了会拒绝启动。已随 `.env` 提交，**生成一次后不要改** |
+| `FLASK_SECRET_KEY` | 是 | Flask session 密钥；缺了会拒绝启动。在共用的 `.env` 里，**生成一次后不要改** |
 
 配置来源三层，后面的覆盖前面的：**`.env` → `.env.local` → 系统环境变量**。
-`.env` 已进库（团队共用），`.env.local` 不进库（个人覆盖），
+`.env` 进库（团队共用、**不含 API Key**），`.env.local` 不进库（每人自己写 Key 与个人覆盖），
 各变量含义详见 `.env.example`。
 
-> ⚠️ `.env` 能进库的前提是**仓库私有**。若仓库转为公开，
-> 立即轮换 `DEEPSEEK_API_KEY` 与 `FLASK_SECRET_KEY`；
-> 仅删文件无效，密钥会留在 git 历史里。
+> ⚠️ 提交前确认 `.env` 里的 `DEEPSEEK_API_KEY` 仍为空。
+> 若曾把真实 Key 提交过，需立即到 DeepSeek 控制台轮换；
+> 仅从文件里删除无效，密钥会留在 git 历史里。
 
 ## 关于检索限流（429）
 
