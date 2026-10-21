@@ -48,7 +48,8 @@ JS_TESTS = [
 ]
 
 # 子进程统一给一份"够用的"环境：
-#   * 没配 .env 的机器上，app.py 缺 FLASK_SECRET_KEY / DEEPSEEK_API_KEY 会直接报错；
+#   * `.env` 不进版本库，新机器上可能没有；app.py 会自动生成一份，但测试里
+#     直接给一份确定的值，免得用例依赖"生成出来的随机会话密钥"；
 #   * Windows 上子进程的 stdout 默认是 GBK，打印带 emoji 的启动信息会抛
 #     UnicodeEncodeError —— 这里用 PYTHONIOENCODING 统一成 utf-8。
 CHILD_ENV = dict(os.environ)

@@ -824,8 +824,9 @@
             background: #f39c12;
         }
 
-        /* ── 未登录提示弹窗 ── */
-        #authPromptModal {
+        /* ── 通用提示弹窗（未登录提示 / 填写 API Key 共用一套外观） ── */
+        #authPromptModal,
+        #apiKeyModal {
             display: none;
             position: fixed;
             inset: 0;
@@ -834,10 +835,12 @@
             justify-content: center;
             align-items: center;
         }
-        #authPromptModal.show {
+        #authPromptModal.show,
+        #apiKeyModal.show {
             display: flex;
         }
-        #authPromptModal .prompt-content {
+        #authPromptModal .prompt-content,
+        #apiKeyModal .prompt-content {
             background: white;
             border-radius: 16px;
             padding: 28px 32px;
@@ -851,30 +854,36 @@
             from { transform: scale(0.94); opacity: 0; }
             to { transform: scale(1); opacity: 1; }
         }
-        #authPromptModal .prompt-icon {
+        #authPromptModal .prompt-icon,
+        #apiKeyModal .prompt-icon {
             font-size: 40px;
             line-height: 1;
             margin-bottom: 12px;
         }
-        #authPromptModal h3 {
+        #authPromptModal h3,
+        #apiKeyModal h3 {
             font-size: 18px;
             color: #1a2a6c;
             margin-bottom: 10px;
         }
-        #authPromptModal .prompt-text {
+        #authPromptModal .prompt-text,
+        #apiKeyModal .prompt-text {
             font-size: 14px;
             color: #667085;
             line-height: 1.7;
             margin-bottom: 22px;
         }
-        #authPromptModal .prompt-text strong {
+        #authPromptModal .prompt-text strong,
+        #apiKeyModal .prompt-text strong {
             color: #1a2a6c;
         }
-        #authPromptModal .prompt-actions {
+        #authPromptModal .prompt-actions,
+        #apiKeyModal .prompt-actions {
             display: flex;
             gap: 10px;
         }
-        #authPromptModal .prompt-actions button {
+        #authPromptModal .prompt-actions button,
+        #apiKeyModal .prompt-actions button {
             flex: 1;
             padding: 10px;
             border-radius: 10px;
@@ -883,21 +892,89 @@
             cursor: pointer;
             transition: all 0.2s;
         }
-        #authPromptModal .btn-cancel {
+        #authPromptModal .btn-cancel,
+        #apiKeyModal .btn-cancel {
             background: #f1f3f7;
             color: #667085;
             border: 1px solid #e3e7ee;
         }
-        #authPromptModal .btn-cancel:hover {
+        #authPromptModal .btn-cancel:hover,
+        #apiKeyModal .btn-cancel:hover {
             background: #e7eaf1;
         }
-        #authPromptModal .btn-go-login {
+        #authPromptModal .btn-go-login,
+        #apiKeyModal .btn-go-login {
             background: #4f7df3;
             color: white;
             border: none;
         }
-        #authPromptModal .btn-go-login:hover {
+        #authPromptModal .btn-go-login:hover,
+        #apiKeyModal .btn-go-login:hover {
             background: #3a66d0;
+        }
+        #apiKeyModal .btn-go-login:disabled {
+            background: #a8bcf0;
+            cursor: default;
+        }
+
+        /* ── 顶部「填写 API Key」按钮 ──
+           没配置时是暖色 + 轻微呼吸动画（不弹窗、不报错，用按钮本身提示）；
+           配置好之后回到和旁边按钮一样的低调样式，点击仍可更换。 */
+        #btnApiKey.needs-key {
+            background: linear-gradient(135deg, #ff9a4d, #ef6c2b);
+            border-color: rgba(255, 255, 255, 0.55);
+            color: #fff;
+            animation: api-key-breathe 1.4s ease-in-out infinite alternate;
+        }
+        #btnApiKey.needs-key:hover {
+            background: linear-gradient(135deg, #ffa963, #f47a3a);
+        }
+        /* 呼吸用的动画只写 from/to（不回写百分比关键帧）：
+           tests/test_pagination.js 里有一条"不允许悬空关键帧片段"的回归用例，
+           写成 `} 55% {` 会被它判成历史 bug 复现。 */
+        @keyframes api-key-breathe {
+            from { box-shadow: 0 0 0 0 rgba(255, 154, 77, 0.6); }
+            to   { box-shadow: 0 0 0 7px rgba(255, 154, 77, 0); }
+        }
+
+        /* ── 填写 API Key 弹窗里的输入框 ── */
+        #apiKeyModal .api-key-field {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 11px 14px;
+            border: 1px solid #dde1e8;
+            border-radius: 10px;
+            font-size: 14px;
+            font-family: 'SF Mono', Consolas, monospace;
+            outline: none;
+            text-align: left;   /* 弹窗整体居中，输入框里的 Key 必须左对齐才好核对 */
+            transition: border-color 0.2s;
+        }
+        #apiKeyModal .api-key-field:focus {
+            border-color: #4f7df3;
+        }
+        #apiKeyModal .api-key-status {
+            min-height: 18px;
+            font-size: 12.5px;
+            color: #e74c5e;
+            margin: 8px 0 14px;
+            line-height: 1.5;
+        }
+        #apiKeyModal .api-key-status.ok {
+            color: #16a34a;
+        }
+        #apiKeyModal .api-key-help {
+            margin-top: 16px;
+            font-size: 12px;
+            color: #8892a4;
+            line-height: 1.8;
+        }
+        #apiKeyModal .api-key-help a {
+            color: #4f7df3;
+            text-decoration: none;
+        }
+        #apiKeyModal .api-key-help a:hover {
+            text-decoration: underline;
         }
 
         /* ── 科研工作流面板 ── */
@@ -1784,6 +1861,8 @@
                 </h1>
             </div>
             <div class="header-actions" id="headerActions">
+                <!-- 没填 Key 时这里是唯一"红色提示"，点开就能填；不弹报错、不挡使用 -->
+                <button class="btn btn-clear btn-sm" id="btnApiKey" onclick="openApiKeyModal()">🔑 填写 API Key</button>
                 <button class="btn btn-clear btn-sm" id="btnFavorites" onclick="showFavorites()">⭐ 收藏</button>
                 <button class="btn btn-clear btn-sm" id="btnWorkflow" onclick="toggleWfPanel()">🤖 科研工作流</button>
                 <button class="btn btn-clear btn-sm" id="btnTable" onclick="toggleTablePanel()">📊 文献表</button>
@@ -1956,6 +2035,33 @@
             </div><!-- /.chat-main -->
         </div>
 
+    </div>
+
+    <!-- ===== 填写 API Key 弹窗 ===== -->
+    <!-- 打开时机只有三个：①点右上角按钮 ②点发送/润色/工作流但还没配 Key
+         ③服务端回 need_api_key。任何时候都不会自动弹，也不在界面上写报错。 -->
+    <div id="apiKeyModal">
+        <div class="prompt-content">
+            <div class="prompt-icon">🔑</div>
+            <h3>填写 DeepSeek API Key</h3>
+            <p class="prompt-text">
+                检索问答、摘要润色、科研工作流都要调用 DeepSeek。<br />
+                把 Key 填在这里，<strong>保存后立刻生效，不用重启</strong>。
+            </p>
+            <input type="password" id="apiKeyInput" class="api-key-field"
+                   placeholder="sk-..." autocomplete="off" spellcheck="false"
+                   onkeydown="if(event.key==='Enter'){event.preventDefault();saveApiKey();}" />
+            <div class="api-key-status" id="apiKeyStatus"></div>
+            <div class="prompt-actions">
+                <button class="btn-cancel" onclick="closeApiKeyModal()">暂不填写</button>
+                <button class="btn-go-login" id="apiKeySaveBtn" onclick="saveApiKey()">保存</button>
+            </div>
+            <div class="api-key-help">
+                还没有 Key？<a href="https://platform.deepseek.com/api_keys" target="_blank"
+                              rel="noopener">去 DeepSeek 控制台申请 →</a><br />
+                只写进本机的 `.env`（不进版本库，没有这个文件会自动生成），页面只回显头尾。
+            </div>
+        </div>
     </div>
 
     <!-- ===== 未登录提示弹窗 ===== -->
@@ -2236,6 +2342,118 @@
             setAuthMode(false);              // 老用户居多：直接给登录表单
             openAuthDropdown();
             setTimeout(() => authUsername.focus(), 50);
+        }
+
+        // ── API Key：没配置时用按钮引导，界面上一句报错都不甩 ──────────
+        //
+        // 为什么做成"按钮 + 弹窗"而不是启动时拦下来：
+        // 换台机器/评审第一次打开，控制台一屏红字、服务起不来，看起来像坏了；
+        // 而实际上只有"要调模型"的那几个功能需要 Key。现在站点照常起，
+        // 只有真正用到模型时才把用户引到这个弹窗里。
+        let apiKeySet = false;
+        let apiKeyHint = '';
+
+        /** 按当前状态刷新顶部按钮：没配置 → 暖色呼吸提示；已配置 → 普通样式 */
+        function applyApiKeyState() {
+            const btn = document.getElementById('btnApiKey');
+            if (!btn) return;
+            if (apiKeySet) {
+                btn.classList.remove('needs-key');
+                btn.textContent = '🔑 API 已配置';
+                btn.title = apiKeyHint
+                    ? '当前 Key：' + apiKeyHint + '（点击可更换）'
+                    : '点击可更换 API Key';
+            } else {
+                btn.classList.add('needs-key');
+                btn.textContent = '🔑 填写 API Key';
+                btn.title = '还没有配置 DeepSeek API Key，点这里填写';
+            }
+        }
+
+        /** 进站时问一次服务端：Key 配了没（只拿头尾，前端不持有完整 Key） */
+        async function loadApiConfig() {
+            try {
+                const resp = await fetch('/api/config', { credentials: 'include' });
+                const data = await resp.json();
+                apiKeySet = !!data.api_key_set;
+                apiKeyHint = data.api_key_hint || '';
+            } catch (e) {
+                apiKeySet = false;      // 拿不到就按"没配"处理：按钮露出来，点了还能试
+            }
+            applyApiKeyState();
+        }
+
+        function openApiKeyModal() {
+            const status = document.getElementById('apiKeyStatus');
+            const inputEl = document.getElementById('apiKeyInput');
+            if (apiKeySet) {
+                status.classList.add('ok');
+                status.textContent = '当前已配置：' + apiKeyHint + '，填入新的 Key 即可替换。';
+            } else {
+                status.classList.remove('ok');
+                status.textContent = '';
+            }
+            inputEl.value = '';
+            document.getElementById('apiKeyModal').classList.add('show');
+            setTimeout(() => inputEl.focus(), 50);
+        }
+
+        function closeApiKeyModal() {
+            document.getElementById('apiKeyModal').classList.remove('show');
+        }
+
+        /**
+         * 需要 Key 的入口统一走这里：返回 true 表示已"拦下并引导填写"。
+         * 注意返回的是"要不要中断当前操作"，不是"有没有 Key"，别写反了。
+         */
+        function requireApiKey() {
+            if (apiKeySet) return false;
+            openApiKeyModal();
+            return true;
+        }
+
+        async function saveApiKey() {
+            const inputEl = document.getElementById('apiKeyInput');
+            const status = document.getElementById('apiKeyStatus');
+            const btn = document.getElementById('apiKeySaveBtn');
+            const key = inputEl.value.trim();
+
+            if (!key) {
+                status.classList.remove('ok');
+                status.textContent = '请先粘贴 API Key';
+                inputEl.focus();
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = '保存中…';
+            try {
+                const resp = await fetch('/api/config/api-key', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ api_key: key }),
+                    credentials: 'include',
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    apiKeySet = true;
+                    apiKeyHint = data.api_key_hint || '';
+                    applyApiKeyState();
+                    status.classList.add('ok');
+                    status.textContent = '✅ 已保存（' + apiKeyHint + '），现在就能用了';
+                    inputEl.value = '';
+                    setTimeout(closeApiKeyModal, 900);
+                } else {
+                    status.classList.remove('ok');
+                    status.textContent = '❌ ' + (data.error || '保存失败');
+                }
+            } catch (e) {
+                status.classList.remove('ok');
+                status.textContent = '❌ 网络错误：' + e.message;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '保存';
+            }
         }
 
         /** 统一设置登录/注册表单的样子（setAuthMode(true) = 注册模式） */
@@ -2919,6 +3137,7 @@
             if (wfState.running) return;
             const goal = document.getElementById('wfGoal').value.trim();
             if (!goal) { document.getElementById('wfGoal').focus(); return; }
+            if (requireApiKey()) return;
             wfState.goal = goal;
             await driveWorkflow({ goal: goal });
         }
@@ -2927,6 +3146,7 @@
         // 已经完成的步骤（检索结果、抽取字段）直接复用，不重跑。
         async function resumeWorkflow() {
             if (wfState.running || !wfState.id) return;
+            if (requireApiKey()) return;
             await driveWorkflow({ workflow_id: wfState.id });
         }
 
@@ -2955,6 +3175,22 @@
                     credentials: 'include',
                 });
                 if (!resp.body) throw new Error('当前浏览器不支持流式读取');
+
+                // 服务端在"没 Key"时返回的是一段 JSON 而不是 SSE（见 /api/workflow）。
+                // 这种情况不要当成"工作流失败"报错，把填写面板打开就行。
+                const ctype = resp.headers.get('content-type') || '';
+                if (ctype.indexOf('application/json') >= 0) {
+                    const err = await resp.json();
+                    if (err.need_api_key) {
+                        apiKeySet = false;
+                        applyApiKeyState();
+                        openApiKeyModal();
+                        const needKey = new Error('need-api-key');
+                        needKey.needApiKey = true;
+                        throw needKey;
+                    }
+                    throw new Error(err.error || '工作流启动失败');
+                }
 
                 const reader = resp.body.getReader();
                 const decoder = new TextDecoder('utf-8');
@@ -3002,7 +3238,12 @@
                     }
                 }
             } catch (e) {
-                document.getElementById('wfHint').textContent = '❌ 工作流失败：' + e.message;
+                if (e && e.needApiKey) {
+                    // 只是缺 Key：引导去填，别写成"❌ 工作流失败"
+                    document.getElementById('wfHint').textContent = '先填写 API Key，再运行工作流。';
+                } else {
+                    document.getElementById('wfHint').textContent = '❌ 工作流失败：' + e.message;
+                }
             }
 
             wfState.running = false;
@@ -3094,6 +3335,8 @@
             // 拦下来之后不关面板：登录成功会自动回到润色面板（resumePendingPanel），
             // 用户刚粘贴的摘要也还在。
             if (requireLogin('摘要润色', 'polishPanel')) return;
+            // 没填 Key 时先去填：不在结果框里写一行红字
+            if (requireApiKey()) return;
             const text = originalAbstract.value.trim();
             const style = polishStyle.value;
             const result = polishedResult;
@@ -4550,6 +4793,10 @@
                 return;
             }
 
+            // 没填 Key：不发请求、不往气泡里写"❌ ..."，直接把填写面板打开。
+            // （放在删除指令之后：删收藏不需要模型，不该被 Key 拦住）
+            if (requireApiKey()) return;
+
             // 未登录时对话不落库，刷新即清空；登录后由服务端保存
             // 附件要一起发走：先把当前这批存下来，再清空预览条
             const filesToSend = pendingFiles.slice();
@@ -4579,6 +4826,7 @@
             let fullContent = '';
             let newConversationId = null;
             let gotCards = false;   // 收到结构化论文卡片后就不再走正则兜底
+            let needKey = false;    // 服务端说"还没配 Key"：引导填写，不留错误气泡
             // 新的一轮：卡片回到第 1 页。不然上一轮翻到第 3 页，
             // 这轮只回来 5 篇时会停在空页上。
             resetCardPaging();
@@ -4648,9 +4896,26 @@
                                 streamStarted = true;
                                 loader.done();
                                 bubble.textContent = '❌ ' + data.message;
+                            } else if (data.type === 'need_api_key') {
+                                // 服务端说"还没配 Key"。这里不派错误气泡：
+                                // 收掉这个占位气泡，直接把「填写 API Key」面板打开。
+                                needKey = true;
+                                break;
                             }
                         } catch (e) { /* ignore */ }
                     }
+                    if (needKey) { try { await reader.cancel(); } catch (e) {} break; }
+                }
+
+                if (needKey) {
+                    apiKeySet = false;
+                    applyApiKeyState();
+                    loader.done();          // 停掉计时器，别让 setInterval 跟着已删掉的节点空转
+                    placeholder.remove();
+                    setLoading(false);
+                    input.focus();
+                    openApiKeyModal();
+                    return;
                 }
 
                 if (fullContent) {
@@ -4735,7 +5000,13 @@
             if (e.target === authPromptModal) closeAuthPrompt();
         });
 
+        // 点击遮罩关闭「填写 API Key」弹窗
+        document.getElementById('apiKeyModal').addEventListener('click', function(e) {
+            if (e.target === this) closeApiKeyModal();
+        });
+
         checkLogin();
+        loadApiConfig();             // 没配 Key 时把顶部按钮点亮（不弹报错）
         setSourcePref(sourcePref);   // 恢复上次选的文献来源
         loadSources();               // 显示当前可用的中文源
         initDraggablePanels();       // 四个弹窗都支持拖标题栏挪位置
@@ -4744,6 +5015,10 @@
         // 一次只关一层，避免按一下把界面上的东西全收掉。
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {
+                if (document.getElementById('apiKeyModal').classList.contains('show')) {
+                    closeApiKeyModal();
+                    return;
+                }
                 if (authPromptModal.classList.contains('show')) {
                     closeAuthPrompt();
                     return;
