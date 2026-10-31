@@ -9710,6 +9710,13 @@
                                 // 开始调工具时清空气泡，后面吐的才是真正的答案。
                                 fullContent = '';
                                 bubble.innerHTML = '';
+                                // 工具检索与推理阶段可能持续十几秒。只清空气泡的话，
+                                // 这段时间界面是一个空白泡泡，最后答案才一次性冒出来
+                                // （看起来像"内容闪一下就消失、生成完才输出"）。
+                                // 重新挂一个加载卡，并让后续 status 事件继续更新文案。
+                                streamStarted = false;
+                                if (loader) loader.done();
+                                loader = startLoading(bubble, abortChat);
                             } else if (data.type === 'calculation') {
                                 renderChatCalculations(placeholder, data.calculations);
                                 messagesDiv.scrollTop = messagesDiv.scrollHeight;
