@@ -30,7 +30,8 @@ import paths  # noqa: E402,F401  （分类后的源码目录，见项目根 path
 import llm  # noqa: E402
 
 R = []
-FLASH = "deepseek-V4.1-flash"
+FLASH = "deepseek-V4.1-flash"          # 界面显示名
+FLASH_API = "deepseek-flash"           # DeepSeek 实际接受的 API 模型 ID
 PRO = "deepseek-v4-pro"
 
 
@@ -63,6 +64,9 @@ ids = [m["id"] for m in llm.MODEL_CATALOG]
 ok("可选模型正好两个", ids == [FLASH, PRO], ids)
 ok("SELECTABLE_MODELS 与清单一致", set(llm.SELECTABLE_MODELS) == {FLASH, PRO},
    llm.SELECTABLE_MODELS)
+ok("界面 flash 映射到 API deepseek-flash", llm.api_model_for(FLASH) == FLASH_API,
+   llm.api_model_for(FLASH))
+ok("pro 的界面名与 API 名相同", llm.api_model_for(PRO) == PRO, llm.api_model_for(PRO))
 ok("默认模型是 flash", llm._resolve_model(None, "chat") == FLASH)
 ok("陌生模型名回落到默认", llm._resolve_model("gpt-4", "chat") == FLASH)
 # 连环境变量也不能绕过白名单（需求：界面/配置都只能选这两个）
@@ -340,15 +344,18 @@ ok("chat_model 指向 DeepSeek base_url",
    getattr(m_think, "openai_api_base", ""))
 
 m_nothink = llm.chat_model("chat", streaming=True, thinking=False)
-ok("关深度思考时用 flash", m_nothink.model_name == FLASH, m_nothink.model_name)
+ok("关深度思考时用 flash（API 侧是 deepseek-flash）",
+   m_nothink.model_name == FLASH_API, m_nothink.model_name)
 ok("关深度思考时保留真流式", m_nothink.streaming is True, m_nothink.streaming)
 
 m_pro = llm.chat_model("chat", model=PRO, thinking=False)
 ok("手动选 pro 时就用 pro", m_pro.model_name == PRO, m_pro.model_name)
 m_unknown = llm.chat_model("chat", model="gpt-4")
-ok("陌生模型名回落到默认", m_unknown.model_name == FLASH, m_unknown.model_name)
+ok("陌生模型名回落到默认（API 侧是 deepseek-flash）",
+   m_unknown.model_name == FLASH_API, m_unknown.model_name)
 m_all = llm.chat_model("chat").model_name
-ok("不传 model 时用默认", m_all == llm.model_for("chat"), m_all)
+ok("不传 model 时用默认的 API 模型",
+   m_all == llm.api_model_for(llm.model_for("chat")), m_all)
 
 # ── 14. 限流器：间隔够用时不该多等 ────────────────────────────────
 fast = llm.RateLimiter(rpm=6000)

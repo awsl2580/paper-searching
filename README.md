@@ -135,7 +135,7 @@ flowchart LR
 ├── providers/               # 多源文献检索（S2 / OpenAlex / Crossref / Europe PMC / DOAJ）
 ├── static/index.html        # 单文件前端（聊天 / 论文卡 / 文献表 / AI4S 工作流面板）
 ├── skills/                  # 6 个 SKILL.md（方法论，可分发、可评审）
-├── tests/                   # 2001 项检查，不依赖 pytest
+├── tests/                   # 2003 项检查，不依赖 pytest
 ├── docs/                    # 赛题对齐说明 / 公网部署 / Live2D 形象设定
 ├── scripts/
 │   ├── launch.py            # 启动器（一键启动.bat 调用；中文提示都在这里）
@@ -242,7 +242,7 @@ python tests/run_all.py
 
 **故意不依赖 pytest**，只用标准库 —— 每个用例都是独立脚本，跑完打印
 `N/M checks passed` 并以退出码表示成败，在没装任何测试框架的机器上（比如评委的环境）
-也能直接验证。当前 **29 个 Python 用例 + 13 个前端用例，共 2001 项检查全绿**（另 4 项「老库升级」检查只在已存在 `literature.db` 时执行）。
+也能直接验证。当前 **29 个 Python 用例 + 13 个前端用例，共 2003 项检查全绿**（另 4 项「老库升级」检查只在已存在 `literature.db` 时执行）。
 
 ---
 
@@ -722,7 +722,7 @@ GET  /api/tts/audio/<20位hex>.mp3    # 取音频（要登录）
 
 `rate` 支持 `-20% / -10% / +0% / +10% / +20%`（接口已通，设置面板暂时只暴露音色）。
 
-## 十一、测试（2001 项检查）
+## 十一、测试（2003 项检查）
 
 | 用例 | 覆盖 | 检查数 |
 |------|------|--------|
@@ -730,7 +730,7 @@ GET  /api/tts/audio/<20位hex>.mp3    # 取音频（要登录）
 | `test_science_tools.py` | 科学工具的数值正确性（t/ANOVA/卡方/Fisher/比例/相关/回归/峰检测/SG/拟合/SMILES/设计） | 276 |
 | `test_mcp.py` | MCP 握手、`tools/list` 字段名、`isError` 语义、错误码、**stdio 子进程真算** | 55 |
 | `test_memory.py` | 打分与召回、预算截断、"记忆≠证据"约束、幂等、归档、遗忘 | 44 |
-| `test_llm.py` | 默认就是 DeepSeek、只允许两个模型（环境变量也不能绕过）、深度思考切 pro、请求体不带 `thinking_mode`、JSON 容错、限流、**pro→flash 自动退回**、`check_models` | 107 |
+| `test_llm.py` | 默认就是 DeepSeek、只允许两个模型（环境变量也不能绕过）、界面名→API 模型 ID 映射、深度思考切 pro、请求体不带 `thinking_mode`、JSON 容错、限流、**pro→flash 自动退回**、`check_models` | 109 |
 | `test_workflow.py` | 规划与缓存、GB/T 7714、全流程、中断/续跑/跳过、单步失败隔离 | 63 |
 | `test_workflow_api.py` | 工作流 SSE、落库、续跑、人工修正、鉴权、限流降级 | 50 |
 | `test_interrupt_resume.py` | 步骤内/步骤间中断、断点唯一、跨会话续跑 | 28 |

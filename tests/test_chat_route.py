@@ -144,8 +144,8 @@ def tokens_of(events):
 
 # ── 0. 模型选择：默认 flash，可指定 pro，陌生名字被拦 ─────────────
 code0, evs0, agent0 = run_chat([("token", "好")])
-ok("不指定模型时用默认 flash", agent0.get("__model__") == "deepseek-V4.1-flash",
-   agent0.get("__model__"))
+ok("不指定模型时用默认 flash（API 侧是 deepseek-flash）",
+   agent0.get("__model__") == "deepseek-flash", agent0.get("__model__"))
 model_ev0 = next((e for e in evs0 if e.get("type") == "model"), {})
 ok("流开头告诉前端本轮用哪个模型",
    model_ev0.get("model") == "deepseek-V4.1-flash", model_ev0)
@@ -161,7 +161,7 @@ ok("回显也跟着变", any(e.get("type") == "model" and e.get("model") == "dee
 
 code2, evs2, agent2 = run_chat([("token", "好")], model="gpt-4")
 ok("陌生模型名被白名单拦下、回落默认",
-   agent2.get("__model__") == "deepseek-V4.1-flash", agent2.get("__model__"))
+   agent2.get("__model__") == "deepseek-flash", agent2.get("__model__"))
 ok("陌生模型名不报错（旧请求体兼容）", code2 == 200, code2)
 
 # ── 0.5 深度思考开关 ────────────────────────────────────────────
@@ -193,7 +193,7 @@ code_img, evs_img, agent_img = run_chat(
     [("token", "看到了")], thinking=True,
     files=[{"name": "a.png", "mime": "image/png", "data": _PNG}])
 ev_img = next((e for e in evs_img if e.get("type") == "model"), {})
-ok("发图时切到读图模型", agent_img.get("__model__") == "deepseek-V4.1-flash",
+ok("发图时切到读图模型", agent_img.get("__model__") == "deepseek-flash",
    agent_img.get("__model__"))
 ok("发图时深度思考被降级", ev_img.get("thinking") is False, ev_img)
 ok("降级原因写清楚了（多模态不支持）",

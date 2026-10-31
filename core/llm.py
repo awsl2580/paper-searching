@@ -141,15 +141,32 @@ PURPOSES = {
 # 按需求，下拉列表**只允许这两个模型**。服务端还有一层白名单校验：
 # 请求体里传任何别的名字都会被回落到默认模型，不会把任意字符串送进 API。
 MODEL_CATALOG = [
-    {"id": "deepseek-V4.1-flash", "name": "DeepSeek-V4.1-Flash", "badge": "NEW",
+    # id/name 是界面上显示与选择的标识；api_model 才是真正发给 DeepSeek 的
+    # 模型 ID。DeepSeek 当前实际接受的是 `deepseek-flash`（它的展示名才是
+    # "DeepSeek-V4.1-Flash"），所以这里必须做一次映射，否则接口会直接 400：
+    #   "The supported API model names are deepseek-flash, deepseek-v4-pro"
+    {"id": "deepseek-V4.1-flash", "api_model": "deepseek-flash",
+     "name": "DeepSeek-V4.1-Flash", "badge": "NEW",
      "desc": "快速通用模型：对话、工具调用、批量抽取与读图，首字快、成本低",
      "purpose": "chat", "verified": True, "default": True, "multimodal": True},
-    {"id": "deepseek-v4-pro", "name": "DeepSeek-V4-Pro",
+    {"id": "deepseek-v4-pro", "api_model": "deepseek-v4-pro",
+     "name": "DeepSeek-V4-Pro",
      "desc": "深度推理模型：科学假设、复现校验与独立审稿，先推理再回答",
      "purpose": "reason", "verified": True, "thinking": True},
 ]
 
 SELECTABLE_MODELS = tuple(m["id"] for m in MODEL_CATALOG)
+API_MODEL_ALIASES = {m["id"]: m.get("api_model") or m["id"] for m in MODEL_CATALOG}
+
+
+def api_model_for(model):
+    """界面/配置里的模型名 -> 真正发给 DeepSeek 的 API 模型 ID。
+
+    `deepseek-V4.1-flash` 是界面显示名，API 实际只认 `deepseek-flash`；
+    `deepseek-v4-pro` 两边同名。把映射收在这一个函数里，请求体、
+    ChatOpenAI、check_models 都走它，避免某处漏改又变成 400。
+    """
+    return API_MODEL_ALIASES.get(model, model)
 
 
 def is_selectable(model):
@@ -394,6 +411,11 @@ def loads_json(raw):
 def _post_chat(payload, timeout=TIMEOUT):
     """发一次 chat/completions，带限流 + 指数退避重试。返回 (ok, data_or_error)。"""
     import requests
+
+    # 复制一份再改，别动调用方手里的 payload：_chat_impl 还要拿它比较
+    # "用户选的模型" 与 "用途默认模型"（那边用的是界面名）。
+    payload = dict(payload)
+    payload["model"] = api_model_for(payload.get("model"))
 
     url = BASE_URL + "/chat/completions"
     headers = {
@@ -675,7 +697,7 @@ def chat_model(kind="chat", temperature=0.0, max_tokens=None, streaming=False,
         ) from e
 
     kwargs = dict(
-        model=model,
+        model=api_model_for(model),
         api_key=api_key(),
         base_url=BASE_URL,
         temperature=temperature,
@@ -702,6 +724,7 @@ def model_info():
             "label": meta["label"],
             "why": meta["why"],
             "model": model,
+            "api_model": api_model_for(model),
             "thinking": thinking_mode_for(kind, model),
             "supports_thinking": _supports_thinking(model),
         })
@@ -809,7 +832,8 @@ def chat_model_name(kind="chat"):
 
 __all__ = [
     "BASE_URL", "PURPOSES", "MODEL_CATALOG", "SELECTABLE_MODELS", "model_catalog",
-    "is_selectable", "available", "api_key", "backend", "call_json", "call_text",
+    "is_selectable", "available", "api_key", "api_model_for", "backend",
+    "call_json", "call_text",
     "chat", "chat_model", "chat_model_name", "check_models", "last_error",
     "http_stats", "loads_json", "model_fallbacks", "model_for", "model_info", "probe",
     "require_llm", "reset_rate_limit_waits", "thinking_mode_for",
