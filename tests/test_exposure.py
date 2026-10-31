@@ -12,7 +12,13 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 测试环境自洽：不依赖 .env，也不要有网络/限流副作用
+os.environ.setdefault("FLASK_SECRET_KEY", "0123456789abcdef" * 4)
+os.environ.setdefault("DEEPSEEK_RPM", "6000")   # 用例里不要因为限流而 sleep
+os.environ.setdefault("MCP_TRANSPORT", "inproc")
+os.environ.setdefault("AI4S_MAX_ITERATIONS", "1")
 sys.path.insert(0, ROOT)
+import paths  # noqa: E402,F401  （分类后的源码目录，见项目根 paths.py）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("DEEPSEEK_API_KEY", "sk-dummy")
 
@@ -54,12 +60,15 @@ for p in FORBIDDEN:
     ok(f"源码/密钥不外泄 {p}", st == 404, st)
 
 # 历史事故的具体形态：旧版本 static/ 里真的躺着一份 app.py
-ok("静态白名单只放行 3 个文件",
-   appmod.STATIC_FILES == {"index.html", "favicon-paper.svg", "logo-paper.svg"},
+ok("静态白名单只放行 5 个文件",
+   appmod.STATIC_FILES == {"index.html", "favicon-owl-32.png",
+                           "logo-owl-64.png", "logo-owl-128.png",
+                           "welcome-owl.webp"},
    appmod.STATIC_FILES)
 
 # ── 3. 该能访问的仍然能访问 ────────────────────────────────
-for p in ("/", "/api/health", "/favicon-paper.svg", "/logo-paper.svg"):
+for p in ("/", "/api/health", "/favicon-owl-32.png",
+          "/logo-owl-64.png", "/logo-owl-128.png", "/welcome-owl.webp"):
     st = c.get(p).status_code
     ok(f"正常页面可访问 {p}", st == 200, st)
 

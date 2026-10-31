@@ -2,9 +2,14 @@
 import json, os, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 测试环境自洽：不依赖 .env，也不要有网络/限流副作用
+os.environ.setdefault("FLASK_SECRET_KEY", "0123456789abcdef" * 4)
+os.environ.setdefault("DEEPSEEK_RPM", "6000")   # 用例里不要因为限流而 sleep
+os.environ.setdefault("MCP_TRANSPORT", "inproc")
+os.environ.setdefault("AI4S_MAX_ITERATIONS", "1")
 os.environ["DEEPSEEK_API_KEY"] = "sk-dummy"
-os.environ.setdefault("FLASK_SECRET_KEY", "test-secret-key-" + "0" * 40)
 sys.path.insert(0, ROOT)
+import paths  # noqa: E402,F401  （分类后的源码目录，见项目根 paths.py）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 临时库放到确认可写的目录（见 tests/_writable_temp.py 的说明）
 from _writable_temp import temp_db_path  # noqa: E402

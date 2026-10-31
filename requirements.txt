@@ -1,11 +1,35 @@
+# 核心 Web 框架
 flask>=3.0.0
+
+# ── 智能体框架 ────────────────────────────────────────────
+# LangChain 的 create_agent（LangGraph 运行时）：工具调用 + astream_events 真流式
 langchain
-langchain-deepseek
 langchain-core
+# DeepSeek API 走 OpenAI 兼容协议（chat/completions + tools + image_url），
+# 所以用 langchain-openai 指到 https://api.deepseek.com/v1 即可，无需额外 SDK
+langchain-openai
+
+# ── 朗读（把回答念出来）─────────────────────────────────
+# edge-tts 走微软的在线中文神经语音，装不上时朗读入口会自动隐藏，
+# 不影响其它功能（core/tts.py:edge_available()）。
+edge-tts>=6.1
+
+# ── 网络与配置 ────────────────────────────────────────────
 requests>=2.28.0
 python-dotenv>=1.0.0
+
+# ── 账号 ─────────────────────────────────────────────────
 bcrypt>=4.0.0
 
-# 图片 / PDF 附件：把 PDF 渲染成图片再交给多模态模型。
+# ── 图片 / PDF 附件：把 PDF 渲染成图片再交给多模态模型 ────
 # 只用 PyMuPDF 自带的渲染器，**不需要额外装 poppler** 之类的系统组件。
 pymupdf>=1.24.0
+
+# ── 说明：科学计算工具（science/）与 MCP 服务（mcp_server.py）──
+# **刻意不引入 numpy / scipy / pandas / mcp SDK**：
+#   * science/ 里的 t/F/卡方分布、SG 平滑、高斯-牛顿拟合、SMILES 解析
+#     全部用标准库手写（数学见 science/stats.py 的注释），
+#     这样评委装完这份 requirements 就能跑，不会有"装不上 scipy"的翻车；
+#   * MCP 的 stdio 传输本身就是换行分隔的 JSON-RPC 2.0，手写比引 SDK 更可控。
+# 如果要接更多的科学计算库（librosa / rdkit 等），加在下面即可，
+# 但请保持"不装也能跑"的底线：对应工具缺失时应当降级而不是启动失败。

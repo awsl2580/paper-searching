@@ -1,4 +1,4 @@
-"""Live chat check: real DeepSeek, the exact queries from the user's screenshot.
+"""Live chat check: 真的调 DeepSeek 模型（配了 DEEPSEEK_API_KEY 时），不打桩。
 
 The fake-agent test proves the wiring; this proves the real path works and
 that an actual answer comes back (the failure mode was an empty reply).
@@ -7,13 +7,19 @@ import json
 import os
 import sys
 
-ROOT = r"C:\code\论文助手\AIagent2\AIagent1"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 测试环境自洽：不依赖 .env，也不要有网络/限流副作用
+os.environ.setdefault("FLASK_SECRET_KEY", "0123456789abcdef" * 4)
+os.environ.setdefault("DEEPSEEK_RPM", "6000")   # 用例里不要因为限流而 sleep
+os.environ.setdefault("MCP_TRANSPORT", "inproc")
+os.environ.setdefault("AI4S_MAX_ITERATIONS", "1")
 sys.path.insert(0, ROOT)
+import paths  # noqa: E402,F401  （分类后的源码目录，见项目根 paths.py）
 from dotenv import load_dotenv
 load_dotenv(os.path.join(ROOT, ".env"))
 
 if not os.getenv("DEEPSEEK_API_KEY"):
-    print("SKIP  DEEPSEEK_API_KEY 未配置")
+    print("SKIP  未配置 DEEPSEEK_API_KEY，无法真机跑")
     sys.exit(0)
 
 import database as db
@@ -26,7 +32,10 @@ db.DB_PATH = DB
 
 import app as appmod
 
-print("模型:", appmod.DEEPSEEK_MODEL)
+_info = appmod.llm_layer.model_info()
+print("模型后端:", _info["backend_label"])
+for _r in _info["roles"]:
+    print("  ", _r["label"], _r["model"])
 db.init_db()
 c = appmod.app.test_client()
 

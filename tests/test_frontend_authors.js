@@ -2,10 +2,12 @@
 // OpenAlex's "汉字+拼音" names. Extracts the real functions from index.html
 // so we test the shipped code, not a copy.
 const fs = require('fs');
-const path = require('path');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'static', 'index.html'), 'utf8');
-const script = html.match(/<script[^>]*>([\s\S]*?)<\/script>/)[1];
+const html = fs.readFileSync(require('path').join(__dirname, '..', 'static', 'index.html'), 'utf8');
+// 页面里有多个 <script>（<head> 里那个是主题初始化），这里取**最长的那块**，
+// 也就是应用主脚本 —— 用 `[1]` 取第一块会在加了早期脚本后取错。
+const _scriptBlocks = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)];
+const script = _scriptBlocks.reduce((a, b) => (b[1].length > a[1].length ? b : a))[1];
 
 function grab(name) {
     const start = script.indexOf('function ' + name + '(');

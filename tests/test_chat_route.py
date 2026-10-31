@@ -9,12 +9,19 @@ workflow_ready handoff, and "no silent empty answer".
 import json
 import os
 import sys
+import time
+import asyncio
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 测试环境自洽：不依赖 .env，也不要有网络/限流副作用
+os.environ.setdefault("FLASK_SECRET_KEY", "0123456789abcdef" * 4)
+os.environ.setdefault("DEEPSEEK_RPM", "6000")   # 用例里不要因为限流而 sleep
+os.environ.setdefault("MCP_TRANSPORT", "inproc")
+os.environ.setdefault("AI4S_MAX_ITERATIONS", "1")
 sys.path.insert(0, ROOT)
+import paths  # noqa: E402,F401  （分类后的源码目录，见项目根 paths.py）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("DEEPSEEK_API_KEY", "sk-dummy")
-os.environ.setdefault("FLASK_SECRET_KEY", "test-secret-key-" + "0" * 40)
 # 临时库放到确认可写的目录（见 tests/_writable_temp.py 的说明）
 from _writable_temp import temp_db_path  # noqa: E402
 
@@ -74,6 +81,17 @@ class FakeAgent:
                 yield {"event": "on_chat_model_stream",
                        "data": {"chunk": AIMessage(
                            content="", additional_kwargs={"reasoning_content": item[1]})}}
+            elif kind == "sleep":
+                # 让流真的"安静"一会儿：验心跳用（服务端在此期间应该发 : ping）
+                await asyncio.sleep(item[1])
+            elif kind == "end":
+                # 非流式调用（开深度思考）时，唯一一次拿到正文的地方
+                yield {"event": "on_chat_model_end",
+                       "data": {"output": AIMessage(content=item[1])}}
+            elif kind == "boom":
+                # BaseException（不是 Exception）：run_agent 内部的 except 接不住，
+                # 只能靠后台线程的兜底 —— 验"任何情况下流都必须结束"。
+                raise KeyboardInterrupt(item[1])
 
 
 def run_chat(script, message="农业", **body):
@@ -85,6 +103,7 @@ def run_chat(script, message="农业", **body):
 
     def fake_create_agent(**kw):
         captured["tools"] = {getattr(t, "name", ""): t for t in kw.get("tools") or []}
+        captured["model"] = kw.get("model")          # 本轮实际用的模型对象
         agent.tools = captured["tools"]   # 让 call_tool 能调到路由建的那个工具实例
         return agent
 
@@ -104,12 +123,93 @@ def run_chat(script, message="农业", **body):
                 events.append(json.loads(line[6:]))
             except ValueError:
                 pass
-    return r.status_code, events, captured.get("tools") or {}
+    tools = captured.get("tools") or {}
+    # 原始字节流：心跳（`: ping`）是 SSE 注释行，解析成事件时会被丢掉，
+    # 但它恰恰是"连接还活着"的证据，所以单独留给用例检查。
+    tools["__raw__"] = raw
+    try:
+        m = captured.get("model")
+        tools["__model__"] = getattr(m, "model_name", None)
+        # "深度思考"开关的验证要用到这两个：是否还在流式、extra_body 是否为空
+        tools["__streaming__"] = getattr(m, "streaming", None)
+        tools["__extra__"] = getattr(m, "extra_body", None)
+    except Exception:
+        pass
+    return r.status_code, events, tools
 
 
 def tokens_of(events):
     return "".join(e.get("token") or "" for e in events if e.get("type") == "token")
 
+
+# ── 0. 模型选择：默认 flash，可指定 pro，陌生名字被拦 ─────────────
+code0, evs0, agent0 = run_chat([("token", "好")])
+ok("不指定模型时用默认 flash", agent0.get("__model__") == "deepseek-V4.1-flash",
+   agent0.get("__model__"))
+model_ev0 = next((e for e in evs0 if e.get("type") == "model"), {})
+ok("流开头告诉前端本轮用哪个模型",
+   model_ev0.get("model") == "deepseek-V4.1-flash", model_ev0)
+ok("模型事件带可显示的名字", model_ev0.get("name") == "DeepSeek-V4.1-Flash",
+   model_ev0.get("name"))
+ok("没发图片时不算切换", model_ev0.get("switched") is False, model_ev0)
+
+code1, evs1, agent1 = run_chat([("token", "好")], model="deepseek-v4-pro")
+ok("界面选了 pro 就真的用它", agent1.get("__model__") == "deepseek-v4-pro",
+   agent1.get("__model__"))
+ok("回显也跟着变", any(e.get("type") == "model" and e.get("model") == "deepseek-v4-pro"
+                     for e in evs1), [e for e in evs1 if e.get("type") == "model"])
+
+code2, evs2, agent2 = run_chat([("token", "好")], model="gpt-4")
+ok("陌生模型名被白名单拦下、回落默认",
+   agent2.get("__model__") == "deepseek-V4.1-flash", agent2.get("__model__"))
+ok("陌生模型名不报错（旧请求体兼容）", code2 == 200, code2)
+
+# ── 0.5 深度思考开关 ────────────────────────────────────────────
+# 关：保持真流式（首字快），且请求体里不出现 thinking_mode
+code_off, evs_off, agent_off = run_chat([("token", "好")], thinking=False)
+ok("关掉深度思考时仍然是流式", agent_off.get("__streaming__") is True,
+   agent_off.get("__streaming__"))
+ok("关掉时不会往请求体塞 thinking_mode",
+   not (agent_off.get("__extra__") or {}), agent_off.get("__extra__"))
+ev_off = next((e for e in evs_off if e.get("type") == "model"), {})
+ok("回显里 thinking=False", ev_off.get("thinking") is False, ev_off)
+
+# 开：切到 deepseek-v4-pro。DeepSeek 的 pro 也支持流式，不再强制整段返回。
+code_on, evs_on, agent_on = run_chat([("token", "好")], thinking=True)
+ok("打开深度思考时切到 pro", agent_on.get("__model__") == "deepseek-v4-pro",
+   agent_on.get("__model__"))
+ok("DeepSeek 的 pro 仍然流式", agent_on.get("__streaming__") is True,
+   agent_on.get("__streaming__"))
+ok("打开后仍然不塞 thinking_mode",
+   not (agent_on.get("__extra__") or {}), agent_on.get("__extra__"))
+ev_on = next((e for e in evs_on if e.get("type") == "model"), {})
+ok("回显里 thinking=True", ev_on.get("thinking") is True, ev_on)
+ok("开关打开也照样能出正文", tokens_of(evs_on) == "好", tokens_of(evs_on))
+
+# 开了思考但发的是图片 -> 本轮走读图模型，深度思考不生效并说明原因
+_PNG = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAF"
+        "AAH/q842iQAAAABJRU5ErkJggg==")
+code_img, evs_img, agent_img = run_chat(
+    [("token", "看到了")], thinking=True,
+    files=[{"name": "a.png", "mime": "image/png", "data": _PNG}])
+ev_img = next((e for e in evs_img if e.get("type") == "model"), {})
+ok("发图时切到读图模型", agent_img.get("__model__") == "deepseek-V4.1-flash",
+   agent_img.get("__model__"))
+ok("发图时深度思考被降级", ev_img.get("thinking") is False, ev_img)
+ok("降级原因写清楚了（多模态不支持）",
+   "不支持" in (ev_img.get("thinking_note") or ""), ev_img.get("thinking_note"))
+ok("降级后仍能正常回答", tokens_of(evs_img) == "看到了", tokens_of(evs_img))
+
+# /api/models 里要带清单（前端下拉列表的数据源）
+c_models = appmod.app.test_client().get("/api/models")
+body_models = c_models.get_json() or {}
+catalog = (body_models.get("models") or {}).get("catalog") or {}
+ok("/api/models 带 catalog", bool(catalog.get("models")), list(catalog))
+ok("catalog 默认 flash", catalog.get("default") == "deepseek-V4.1-flash",
+   catalog.get("default"))
+ok("catalog 只提供两个模型",
+   [m["id"] for m in catalog.get("models", [])] == ["deepseek-V4.1-flash", "deepseek-v4-pro"],
+   [m["id"] for m in catalog.get("models", [])])
 
 # ── 1. 普通检索问答：工具 -> 论文 -> 正文 ───────────────────────────
 code, evs, agent = run_chat([
@@ -230,10 +330,9 @@ ok("工具返回不是 JSON", not raw8.lstrip().startswith(("{", "[")), raw8[:60
 ok("工具返回是中文散文", "。" in raw8 and "已为用户规划" in raw8, raw8[:60])
 ok("工具返回带执行流程", "检索" in raw8 and "参考文献" in raw8, raw8[:120])
 
-# ── 7. 思考模型（deepseek-flash）：思考阶段不能让界面看起来卡死 ──────
-# 实测 deepseek-flash 默认开思考：一个需要推理的问题会先吐 4637 字
-# reasoning_content，首字在 21.4s 才出现（对比 deepseek-chat 的 0.6s）。
-# 如果代码只读 content，这 21 秒里前端一个字节都收不到，就是个空白转圈。
+# ── 7. 推理模型（deepseek-v4-pro）：思考阶段不能让界面看起来卡死 ────
+# pro 会先吐一大段 reasoning_content，正文要等推理结束才出现。
+# 如果代码只读 content，这段时间前端一个字节都收不到，就是个空白转圈。
 _, evs9, _ = run_chat([
     ("reasoning", "先分析题目……"),
     ("reasoning", "再梳理方法……"),
@@ -261,6 +360,127 @@ _, evs10, _ = run_chat([("tool_start", "search_papers"),
 statuses10 = [e.get("text") or "" for e in evs10 if e.get("type") == "status"]
 ok('非思考模型不出现「模型正在思考」',
    not any("模型正在思考" in s for s in statuses10), statuses10)
+
+# ── 8. 强制中止：前端按钮/气泡 + 服务端 cancel 接口 ─────────────
+_html = open(os.path.join(ROOT, "static", "index.html"), encoding="utf-8").read()
+ok("聊天有强制中止函数（abortChat）", "function abortChat()" in _html)
+ok("思考中按钮 hover 提示再次点击中止", "再次点击中止思考" in _html)
+ok("发送按钮思考中保持可点击（改成中止入口）",
+   "sendBtn.disabled = false" in _html and "function onSendClick()" in _html)
+ok("聊天请求带 request_id、AbortController 和 signal",
+   "request_id: requestId" in _html and "new AbortController()" in _html
+   and "signal: controller.signal" in _html)
+_abort_client = appmod.app.test_client()
+ok("中止接口拒绝空 request_id",
+   _abort_client.post("/api/chat/abort", json={}).status_code == 400)
+_abort_unknown = _abort_client.post("/api/chat/abort", json={"request_id": "no-such-request"})
+ok("中止接口对未知 id 返回 aborted=false",
+   _abort_unknown.status_code == 200 and _abort_unknown.get_json().get("aborted") is False,
+   _abort_unknown.get_json())
+
+# ── 9. 流的收尾契约：就算连接不断，这一轮也必须结束 ────────────────
+# 用户报的现象：回答已经输出完，按钮还停在「思考中...」，而且切到别的
+# 对话分支也发不出消息。前端只认"连接被关掉"时，只要连接一直挂着，
+# 这一轮就永远不结束、输入框永远锁着。所以服务端要能证明两件事：
+#   ① 流里始终有"我还活着"的信号（SSE 心跳），前端才敢用看门狗兜底；
+#   ② 无论后台线程怎么死，生成器都要拿到终结事件，不能干等到 240 秒。
+_, evs_done, _ = run_chat([("token", "好")])
+ok("正常一轮以 done 收尾", bool(evs_done) and evs_done[-1].get("type") == "done",
+   [e.get("type") for e in evs_done][-3:])
+ok("done 之后没有别的事件（前端收到就能收工）",
+   sum(1 for e in evs_done if e.get("type") == "done") == 1,
+   [e.get("type") for e in evs_done])
+
+os.environ["CHAT_HEARTBEAT_SECONDS"] = "0.05"
+try:
+    # 服务端有 1 秒下限，所以这里安静 1.5 秒，必然能收到一次心跳
+    _, evs_hb, hb = run_chat([("sleep", 1.5), ("token", "好")])
+finally:
+    os.environ.pop("CHAT_HEARTBEAT_SECONDS", None)
+_raw_hb = hb.get("__raw__") or ""
+_ping_lines = [ln for ln in _raw_hb.splitlines() if ln.startswith(":")]
+ok("流里有 SSE 心跳（前端会忽略内容，但会重置看门狗）",
+   bool(_ping_lines) and all("ping" in ln for ln in _ping_lines), _ping_lines[:3])
+ok("心跳走的是注释行，不会变成前端的数据事件",
+   all(not ln.startswith("data:") for ln in _ping_lines)
+   and all(e.get("type") != "ping" for e in evs_hb), _ping_lines[:3])
+ok("有心跳也照样出正文", tokens_of(evs_hb) == "好", tokens_of(evs_hb))
+
+_t0 = time.time()
+try:
+    _, evs_boom, _ = run_chat([("token", "半句"), ("boom", "后台炸了")])
+    _elapsed = time.time() - _t0
+    ok("agent 抛 BaseException 时流也会立刻结束（不是等 240 秒超时）",
+       _elapsed < 20, round(_elapsed, 1))
+    _err_boom = next((e for e in evs_boom if e.get("type") == "error"), {})
+    ok("崩溃会被转成 error 事件（不静默）",
+       bool(_err_boom) and "KeyboardInterrupt" in (_err_boom.get("message") or ""), _err_boom)
+    ok("崩溃前已经流出去的内容不会被抹掉",
+       "半句" in tokens_of(evs_boom), tokens_of(evs_boom))
+
+    # 关键回归：这一轮崩了之后，**下一轮必须还能正常跑**。
+    # 所有请求共用一个常驻事件循环，一个 BaseException 要是逃进循环里，
+    # 它会当场死掉，之后每一轮都只能干等 240 秒（实测过，全家挂死）。
+    _t_after = time.time()
+    _, evs_after, _ = run_chat([("token", "下一轮照常")])
+    _el_after = time.time() - _t_after
+    ok("一轮崩溃不会带走常驻事件循环（下一轮照常出字）",
+       tokens_of(evs_after) == "下一轮照常" and _el_after < 20,
+       (tokens_of(evs_after), round(_el_after, 1)))
+except BaseException as e:  # noqa: BLE001 - 用例要报"没兜住"，不是把异常抛给上层
+    ok("agent 抛 BaseException 时流也会立刻结束（不是等 240 秒超时）", False, repr(e))
+
+
+# 直接验兜底那一层：**提交任务这一步自己就抛**（不是 agent 内部抛）。
+# 这种异常没有任何地方能接住，以前队列会一直空着 → 只能干等 240 秒超时。
+def _boom_submit(*a, **k):
+    raise RuntimeError("事件循环炸了")
+
+
+_orig_submit = appmod.asyncio.run_coroutine_threadsafe
+appmod.asyncio.run_coroutine_threadsafe = _boom_submit
+try:
+    _t1 = time.time()
+    _, evs_guard, _ = run_chat([("token", "不应该到这里")])
+    _el1 = time.time() - _t1
+finally:
+    appmod.asyncio.run_coroutine_threadsafe = _orig_submit
+_err = next((e for e in evs_guard if e.get("type") == "error"), {})
+ok("提交任务失败时也会终结流（不干等 240 秒）", _el1 < 20, round(_el1, 1))
+ok("线程崩溃会被转成 error 事件告诉前端",
+   "后台任务异常" in (_err.get("message") or ""), _err)
+
+# 常驻循环是单例：多轮请求必须复用它（每轮新建循环就会踩「Event loop is closed」）
+_loop_a = appmod._agent_loop()
+_loop_b = appmod._agent_loop()
+ok("所有请求共用一个常驻事件循环", _loop_a is _loop_b)
+ok("常驻循环活着（没被上一轮的异常带走）", not _loop_a.is_closed())
+
+# ── 10. 非流式（开了「深度思考」）：正文只在 on_chat_model_end 里 ────
+# 现象（用户报的）：勾上「深度思考」后，不管问什么都只回一句"抱歉，未能获取到回复"。
+# 根因：某些模型/网关在推理模式下不产生 on_chat_model_stream 分片，
+#       而服务端只从分片累计正文 —— 于是整轮一个 token 都没有。
+_, evs_ns, _ = run_chat([("end", "过拟合是模型把噪声也学进去了。")])
+got_ns = tokens_of(evs_ns)
+ok("开思考（非流式）也能拿到正文", got_ns == "过拟合是模型把噪声也学进去了。", got_ns)
+ok("不再退回「抱歉，未能获取到回复」", "抱歉，未能获取到回复" not in got_ns, got_ns)
+ok("非流式也会以 done 收尾",
+   bool(evs_ns) and evs_ns[-1].get("type") == "done", [e.get("type") for e in evs_ns][-3:])
+
+# 流式路径不能因为多接一个 end 事件就把正文重复一遍
+_, evs_dup, _ = run_chat([("token", "只发一次。"), ("end", "只发一次。")])
+ok("流式 + end 同时出现时正文不重复", tokens_of(evs_dup) == "只发一次。", tokens_of(evs_dup))
+
+# 非流式 + 工具：工具照常调用，论文卡片照常出
+_, evs_ns_tool, _ = run_chat([
+    ("tool_start", "search_papers"),
+    ("tool_end", json.dumps({"papers": PAPERS}, ensure_ascii=False)),
+    ("end", "找到 1 篇。"),
+])
+ok("非流式下工具结果仍变成 papers 事件",
+   any(e.get("type") == "papers" for e in evs_ns_tool),
+   [e.get("type") for e in evs_ns_tool])
+ok("非流式下正文照常输出", tokens_of(evs_ns_tool) == "找到 1 篇。", tokens_of(evs_ns_tool))
 
 n_pass = sum(1 for _, c_, _ in R if c_)
 for name, cond, got in R:

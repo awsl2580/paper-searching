@@ -1,4 +1,4 @@
-"""Live end-to-end run: real DeepSeek + real academic providers, no mocks.
+"""Live end-to-end run: 真 DeepSeek 模型 + 真文献数据源 + 真 MCP 计算，全程不打桩。
 
 Drives POST /api/workflow through the Flask test client and prints what the
 pipeline actually produced. Slow (several model calls + real API searches),
@@ -6,14 +6,20 @@ so run it in the background.
 """
 import json, os, sys, time
 
-ROOT = r"C:\code\论文助手\AIagent2\AIagent1"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 测试环境自洽：不依赖 .env，也不要有网络/限流副作用
+os.environ.setdefault("FLASK_SECRET_KEY", "0123456789abcdef" * 4)
+os.environ.setdefault("DEEPSEEK_RPM", "6000")   # 用例里不要因为限流而 sleep
+os.environ.setdefault("MCP_TRANSPORT", "inproc")
+os.environ.setdefault("AI4S_MAX_ITERATIONS", "1")
 sys.path.insert(0, ROOT)
+import paths  # noqa: E402,F401  （分类后的源码目录，见项目根 paths.py）
 
 from dotenv import load_dotenv
 load_dotenv(os.path.join(ROOT, ".env"))
 
 if not os.getenv("DEEPSEEK_API_KEY"):
-    print("!! DEEPSEEK_API_KEY 未配置，无法真机跑")
+    print("!! 未配置 DEEPSEEK_API_KEY，无法真机跑")
     sys.exit(2)
 
 import database as db

@@ -6,10 +6,15 @@ This mirrors exactly what the new frontend resume button does: it posts only
 import json, os, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 测试环境自洽：不依赖 .env，也不要有网络/限流副作用
+os.environ.setdefault("FLASK_SECRET_KEY", "0123456789abcdef" * 4)
+os.environ.setdefault("DEEPSEEK_RPM", "6000")   # 用例里不要因为限流而 sleep
+os.environ.setdefault("MCP_TRANSPORT", "inproc")
+os.environ.setdefault("AI4S_MAX_ITERATIONS", "1")
 os.environ["DEEPSEEK_API_KEY"] = "sk-dummy"
-os.environ.setdefault("FLASK_SECRET_KEY", "test-secret-key-" + "0" * 40)
 os.environ["S2_MIN_INTERVAL"] = "0"
 sys.path.insert(0, ROOT)
+import paths  # noqa: E402,F401  （分类后的源码目录，见项目根 paths.py）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 临时库放到确认可写的目录（见 tests/_writable_temp.py 的说明）
 from _writable_temp import temp_db_path  # noqa: E402
@@ -66,6 +71,8 @@ wf._call_json = mock_llm
 client = appmod.app.test_client()
 client.post("/api/register", json={"username": "tester", "password": "Passw0rd1"})
 client.post("/api/login", json={"username": "tester", "password": "Passw0rd1"})
+# 账号改存 accounts.json 后，新账号 id 不一定是 1，用接口取真实 id。
+UID = ((client.get("/api/me").get_json() or {}).get("user") or {}).get("id")
 
 
 def drive(payload, c=client):
@@ -99,7 +106,7 @@ wid = next(e for e in evs1 if e.get("type") == "plan")["workflow_id"]
 snap1 = next(e for e in evs1 if e.get("type") == "snapshot")
 st1 = {s["key"]: s["status"] for s in snap1["steps"]}
 ok("首次运行被中断", evs1[-1]["status"] == "interrupted", evs1[-1])
-row1 = db.get_workflow(wid, user_id=1)
+row1 = db.get_workflow(wid, user_id=UID)
 broken = [k for k, v in row1["steps"].items() if v["status"] == "interrupted"]
 ok("恰有一个断点步骤", len(broken) == 1, {k: v["status"] for k, v in row1["steps"].items()})
 ok("断点是下一步", broken and broken[0] == "extract", broken)
@@ -126,12 +133,12 @@ ok("续跑没有重跑检索", "search" not in [e.get("key") for e in evs2
 
 snap2 = next(e for e in evs2 if e.get("type") == "snapshot")
 st2 = {s["key"]: s["status"] for s in snap2["steps"]}
-ok("续跑后五步全 done", all(v == "done" for v in st2.values()), st2)
+ok("续跑后九步全 done", all(v == "done" for v in st2.values()), st2)
 ok("续跑快照保留断点前的步骤", st2.get("search") == "done", st2)
 ok("续跑最终状态 done", evs2[-1]["status"] == "done", evs2[-1])
 
-row2 = db.get_workflow(wid, user_id=1)
-ok("库里五步全 done", all(v["status"] == "done" for v in row2["steps"].values()),
+row2 = db.get_workflow(wid, user_id=UID)
+ok("库里九步全 done", all(v["status"] == "done" for v in row2["steps"].values()),
    {k: v["status"] for k, v in row2["steps"].items()})
 ok("报告含综述正文", "研究背景" in (row2["report_md"] or ""))
 ok("报告含参考文献", "GB/T 7714" in (row2["report_md"] or ""))
@@ -142,45 +149,51 @@ small = papers(3)
 code3, evs3 = drive({"workflow_id": wid, "papers": small}, c=fresh)
 snap3 = next(e for e in evs3 if e.get("type") == "snapshot")
 ok("人工修正后用 3 篇", snap3["paperCount"] == 3, snap3["paperCount"])
-row3 = db.get_workflow(wid, user_id=1)
+row3 = db.get_workflow(wid, user_id=UID)
 ok("人工修正已落库", len((row3.get("context") or {}).get("papers") or []) == 3,
    len((row3.get("context") or {}).get("papers") or []))
 
 # ── B. 在两个步骤之间中断 ───────────────────────────────────────
-# should_stop 的调用点：1 search顶 / 2 extract顶 / 3 extract批 / 4 synth顶 / 5 ana顶 / 6 fmt顶
-# （analyze、format 是纯计算，没有内部检查点）
-# 阈值 5 -> 第 6 次问（analyze 顶部）返回 True：前三步 done，断点落在 analyze。
+# AI4S 流水线的 should_stop 调用点（8 篇 -> 抽取只有 1 批）：
+#   1 search顶 / 2 extract顶 / 3 extract批 / 4 analyze顶 / 5 hypothesis顶 / 6 experiment顶
+# （analyze、compute 是纯计算，没有内部检查点；synthesize 开始前还有 1 个）
+# 阈值 5 -> 第 6 次问（experiment 顶部）返回 True：
+# 前四步（search/extract/analyze/hypothesis）done，断点落在还没开始的 experiment。
 calls["n"] = 0
-def stop_before_analyze():
+def stop_before_experiment():
     calls["n"] += 1
     return calls["n"] > 5
 
 class Stopping2(orig):
     def __init__(self, plan, **kw):
-        kw["should_stop"] = stop_before_analyze
+        kw["should_stop"] = stop_before_experiment
         super().__init__(plan, **kw)
 wf.WorkflowRunner = Stopping2
 _, evs4 = drive({"goal": "遥感图像语义分割综述"}, c=fresh)
 wf.WorkflowRunner = orig
 
 wid4 = next(e for e in evs4 if e.get("type") == "plan")["workflow_id"]
-row4 = db.get_workflow(wid4, user_id=1)
+row4 = db.get_workflow(wid4, user_id=UID)
 st4 = {k: v["status"] for k, v in row4["steps"].items()}
-ok("步间中断：断点落在还没开始的 analyze", st4.get("analyze") == "interrupted", st4)
+ok("步间中断：断点落在还没开始的 experiment",
+   st4.get("experiment") == "interrupted", st4)
 ok("步间中断：跑完的步骤保持 done",
-   all(st4.get(k) == "done" for k in ("search", "extract", "synthesize")), st4)
+   all(st4.get(k) == "done" for k in ("search", "extract", "analyze", "hypothesis")), st4)
 ok("步间中断：恰一个断点",
    sum(1 for v in st4.values() if v == "interrupted") == 1, st4)
 ok("步间中断：库状态为 interrupted", row4["status"] == "interrupted", row4["status"])
-ok("步间中断：综述正文已留存", bool((row4.get("context") or {}).get("synth")),
-   bool((row4.get("context") or {}).get("synth")))
+# 新流程里 analyze 在 hypothesis 之前跑完，所以中断前留存的是"假设"而不是"综述"
+ok("步间中断：假设已留存",
+   bool((row4.get("context") or {}).get("hypothesis")),
+   bool((row4.get("context") or {}).get("hypothesis")))
 
 _, evs5 = drive({"workflow_id": wid4}, c=fresh)
 plan5 = next(e for e in evs5 if e.get("type") == "plan")
-ok("步间续跑：从 analyze 接着跑", plan5.get("start_from") == "analyze", plan5.get("start_from"))
+ok("步间续跑：从 experiment 接着跑",
+   plan5.get("start_from") == "experiment", plan5.get("start_from"))
 snap5 = next(e for e in evs5 if e.get("type") == "snapshot")
 st5 = {s["key"]: s["status"] for s in snap5["steps"]}
-ok("步间续跑：五步全 done", all(v == "done" for v in st5.values()), st5)
+ok("步间续跑：九步全 done", all(v == "done" for v in st5.values()), st5)
 ok("步间续跑：最终 done", evs5[-1]["status"] == "done", evs5[-1])
 
 n_pass = sum(1 for _, c, _ in R if c)

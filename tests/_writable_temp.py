@@ -15,7 +15,6 @@ Import this at the TOP of a test file, before overriding `db.DB_PATH`:
     from _writable_temp import temp_db_path
     db.DB_PATH = temp_db_path("smoke.db")
 """
-import atexit
 import os
 import sqlite3
 import tempfile
@@ -60,6 +59,21 @@ def temp_db_path(name):
     return p
 
 
+def isolate_accounts(name="_test_accounts.json"):
+    """把账号文件（accounts.json）指到临时目录。
+
+    直接 `python tests/xxx.py` 跑单个用例时，run_all 设的 WF_TEST_TMP 并不存在，
+    于是 accounts.py 会退回项目根目录 —— 用例里注册的 smoke/tester 就会写进
+    你真实的账号文件（本项目已经被这么污染过一次）。
+    所以在模块导入时就把 ACCOUNTS_FILE 钉到临时目录。
+    """
+    if os.environ.get("ACCOUNTS_FILE"):
+        return os.environ["ACCOUNTS_FILE"]
+    p = os.path.join(temp_dir(), name)
+    os.environ["ACCOUNTS_FILE"] = p
+    return p
+
+
 def temp_file_path(name):
     p = os.path.join(temp_dir(), name)
     if os.path.exists(p):
@@ -67,23 +81,5 @@ def temp_file_path(name):
     return p
 
 
-# 账号备份也要重定向。为什么：测试里 register 一次就会 export 一份
-# accounts.json，而它默认落在**项目目录**——跑完测试，项目里就多出一堆
-# "测试账号"（还会被下一次 import 自动合并进临时库，把用户 id 搅乱）。
-# database.py 读 PAPER_ACCOUNTS_FILE，这里在 import 时就把它指到临时目录。
-# 文件名带 PID：每个测试进程一份，避免 A 用例注册的账号被 B 用例的
-# init_db() 合并进来，把 user id 顶掉（好几个用例假设第一个注册用户 id=1）。
-# 注意：本模块必须在 `import database` 之前导入（现有用例都是这么写的）。
-_ACCOUNTS_TMP = os.path.join(temp_dir(), f"_tmp_accounts_{os.getpid()}.json")
-os.environ.setdefault("PAPER_ACCOUNTS_FILE", _ACCOUNTS_TMP)
-
-
-def _cleanup_accounts_tmp():
-    try:
-        if os.path.exists(_ACCOUNTS_TMP):
-            os.remove(_ACCOUNTS_TMP)
-    except OSError:
-        pass
-
-
-atexit.register(_cleanup_accounts_tmp)
+# 导入即生效：任何一个用例只要 import 了本模块，账号文件就不会落到项目根目录。
+isolate_accounts()

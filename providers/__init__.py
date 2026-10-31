@@ -24,7 +24,13 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
-from providers import crossref as _crossref
+from env_boot import load_project_env
+
+# 各 provider 的 mailto / 节流 / 缓存参数都来自环境变量，
+# 直接被 import（不走 app.py）时也要能读到 .env
+load_project_env()
+
+from providers import crossref as _crossref  # noqa: E402
 from providers import doaj as _doaj
 from providers import europepmc as _europepmc
 from providers import openalex as _openalex

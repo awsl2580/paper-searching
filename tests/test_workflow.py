@@ -4,7 +4,13 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 测试环境自洽：不依赖 .env，也不要有网络/限流副作用
+os.environ.setdefault("FLASK_SECRET_KEY", "0123456789abcdef" * 4)
+os.environ.setdefault("DEEPSEEK_RPM", "6000")   # 用例里不要因为限流而 sleep
+os.environ.setdefault("MCP_TRANSPORT", "inproc")
+os.environ.setdefault("AI4S_MAX_ITERATIONS", "1")
 sys.path.insert(0, ROOT)
+import paths  # noqa: E402,F401  （分类后的源码目录，见项目根 paths.py）
 os.environ["DEEPSEEK_API_KEY"] = "sk-dummy"
 os.environ["S2_MIN_INTERVAL"] = "0"
 
@@ -227,7 +233,8 @@ runner = wf.WorkflowRunner({"topic": "GNN", "query": "gnn", "source": "all", "li
                            on_step=lambda k, s, d: steps_seen.append((k, s)))
 state = runner.run()
 snap = runner.snapshot()
-ok("五步全部执行", len(steps_seen) >= 10, steps_seen)
+ok("九步全部执行（每步 running+done 各报一次，>=18）",
+   len(steps_seen) >= 18, len(steps_seen))
 ok("所有步骤状态为 done", all(s["status"] == "done" for s in snap["steps"]),
    [(s["key"], s["status"]) for s in snap["steps"]])
 ok("快照含文献", len(snap["papers"]) == 6)

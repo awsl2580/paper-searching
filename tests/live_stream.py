@@ -8,7 +8,7 @@
 或者某一步特别慢导致观感又变回"卡住"。这个脚本量的是真实时间线。
 
 用法：
-    python app.py            # 另开一个终端把服务跑起来
+    python web/app.py        # 另开一个终端把服务跑起来
     python tests/live_stream.py
 
 判据：首个 step 事件要在 1 秒内到达，且 step 事件跨度要占总时长的一半以上

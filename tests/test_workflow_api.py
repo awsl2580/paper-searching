@@ -4,10 +4,15 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 测试环境自洽：不依赖 .env，也不要有网络/限流副作用
+os.environ.setdefault("FLASK_SECRET_KEY", "0123456789abcdef" * 4)
+os.environ.setdefault("DEEPSEEK_RPM", "6000")   # 用例里不要因为限流而 sleep
+os.environ.setdefault("MCP_TRANSPORT", "inproc")
+os.environ.setdefault("AI4S_MAX_ITERATIONS", "1")
 os.environ["DEEPSEEK_API_KEY"] = "sk-dummy"
-os.environ.setdefault("FLASK_SECRET_KEY", "test-secret-key-" + "0" * 40)
 os.environ["S2_MIN_INTERVAL"] = "0"
 sys.path.insert(0, ROOT)
+import paths  # noqa: E402,F401  （分类后的源码目录，见项目根 paths.py）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 临时库放到确认可写的目录（见 tests/_writable_temp.py 的说明）
 from _writable_temp import temp_db_path  # noqa: E402
@@ -59,6 +64,8 @@ wf._call_json = mock_llm
 client = appmod.app.test_client()
 client.post("/api/register", json={"username": "tester", "password": "Passw0rd1"})
 client.post("/api/login", json={"username": "tester", "password": "Passw0rd1"})
+# 账号改存 accounts.json 后，新账号 id 不一定是 1，用接口取真实 id。
+UID = ((client.get("/api/me").get_json() or {}).get("user") or {}).get("id")
 
 
 def drive(body):
@@ -87,9 +94,10 @@ ok("plan 带 workflow_id", isinstance(plan_ev.get("workflow_id"), int))
 wid = plan_ev["workflow_id"]
 
 snap = next(e for e in evs if e.get("type") == "snapshot")
-ok("snapshot 含 5 个步骤", len(snap["steps"]) == 5, len(snap["steps"]))
-ok("步骤都标了核心功能编号",
-   [s["core"] for s in snap["steps"]] == ["①", "②", "②", "③", "④"],
+ok("snapshot 含 9 个 AI4S 步骤", len(snap["steps"]) == 9, len(snap["steps"]))
+# 赛题要求覆盖「搜、读、算、做、写」，并额外有"想(假设)"与"验(验证)"两环
+ok("步骤都标了搜读想做算验写",
+   [s["core"] for s in snap["steps"]] == ["搜", "读", "读", "想", "做", "算", "验", "写", "写"],
    [s["core"] for s in snap["steps"]])
 ok("全部步骤 done", all(s["status"] == "done" for s in snap["steps"]),
    [(s["key"], s["status"]) for s in snap["steps"]])
@@ -104,18 +112,20 @@ ok("报告含信息抽取明细", "信息抽取明细" in snap["report"])
 ok("done 状态为 done", evs[-1]["status"] == "done", evs[-1])
 
 # ── 2. 状态落库 ──────────────────────────────────────────────────────────
-row = db.get_workflow(wid, user_id=1)
+row = db.get_workflow(wid, user_id=UID)
 ok("工作流已落库", row is not None)
 ok("状态为 done", row["status"] == "done", row["status"])
-ok("五步状态都存了", len(row["steps"]) == 5, list(row["steps"].keys()))
-ok("上下文含 papers/stats/synth", all(k in (row["context"] or {}) for k in ("papers", "stats", "synth")))
+ok("九步状态都存了", len(row["steps"]) == 9, list(row["steps"].keys()))
+ok("上下文含 papers/stats/synth/假设/实验/计算/验证",
+   all(k in (row["context"] or {}) for k in (
+       "papers", "stats", "synth", "hypothesis", "experiment", "computation", "verify")))
 ok("报告已落库", len(row["report_md"] or "") > 200)
 
 # ── 3. GET 读回 ─────────────────────────────────────────────────────────
 r = client.get(f"/api/workflow/{wid}")
 ok("GET 工作流 200", r.status_code == 200, r.status_code)
 got = r.json["workflow"]
-ok("GET 返回步骤与产物", len(got["steps"]) == 5 and got.get("report"))
+ok("GET 返回步骤与产物", len(got["steps"]) == 9 and got.get("report"))
 ok("GET 不存在的 id -> 404", client.get("/api/workflow/99999").status_code == 404)
 
 # ── 4. 中断 + 续跑 ───────────────────────────────────────────────────────
@@ -137,7 +147,7 @@ st2 = {s["key"]: s["status"] for s in snap2["steps"]}
 ok("中断后存在 interrupted 步骤", "interrupted" in st2.values(), st2)
 ok("中断前的步骤保留 done", "done" in st2.values(), st2)
 wid2 = next(e for e in evs2 if e.get("type") == "plan")["workflow_id"]
-row2 = db.get_workflow(wid2, user_id=1)
+row2 = db.get_workflow(wid2, user_id=UID)
 ok("中断事件也落库", row2["status"] == "interrupted", row2["status"])
 ok("中断时已完成的步骤落库", any(v["status"] == "done" for v in row2["steps"].values()))
 ok("每步都发了 done 事件", {"done"} <= {e["status"] for e in evs2 if e.get("type") == "step"})
@@ -156,7 +166,7 @@ st3 = {s["key"]: s["status"] for s in snap3["steps"]}
 ok("续跑后全部完成", all(v == "done" for v in st3.values()), st3)
 ok("续跑快照保留上一轮已完成的步骤", st3.get("search") == "done", st3)
 ok("续跑最终状态 done", evs3[-1]["status"] == "done", evs3[-1])
-row3 = db.get_workflow(wid2, user_id=1)
+row3 = db.get_workflow(wid2, user_id=UID)
 ok("续跑报告完整", "参考文献（GB/T 7714）" in (row3["report_md"] or ""))
 
 # ── 5. 人工修正文献后续跑 ────────────────────────────────────────────────

@@ -4,10 +4,12 @@
 // 但证明不了"用户选完文件后前端真的会把它带上"。中间这段
 // （FileReader 读取、校验、预览、清空时机）才是最容易静默失效的地方。
 const fs = require('fs');
-const path = require('path');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'static', 'index.html'), 'utf8');
-const script = html.match(/<script[^>]*>([\s\S]*?)<\/script>/)[1];
+const html = fs.readFileSync(require('path').join(__dirname, '..', 'static', 'index.html'), 'utf8');
+// 页面里有多个 <script>（<head> 里那个是主题初始化），这里取**最长的那块**，
+// 也就是应用主脚本 —— 用 `[1]` 取第一块会在加了早期脚本后取错。
+const _scriptBlocks = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)];
+const script = _scriptBlocks.reduce((a, b) => (b[1].length > a[1].length ? b : a))[1];
 
 let pass = 0, fail = 0;
 function ok(name, cond, got) {

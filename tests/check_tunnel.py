@@ -6,7 +6,7 @@
     python check_tunnel.py 8080 你的域名       # 域名也自己给
 
 它按链路顺序逐段检查，第一个断掉的环节就是问题所在：
-    ① 本地端口有没有服务        -> 没有就先把 python app.py 跑起来
+    ① 本地端口有没有服务        -> 没有就先把 python web/app.py 跑起来
     ② 本机有没有 natapp 客户端   -> 没有就双击 内网穿透\\run_natapp.bat
     ③ 公网域名能不能通          -> 502 说明隧道没连到本机这个端口
 """
@@ -34,7 +34,7 @@ def check_local():
             return True
     except Exception as e:
         print(BAD + f"本地 {BASE} 没有服务：{type(e).__name__}")
-        print("        解决：cd AIagent2\\AIagent1 然后  set APP_PORT=" + PORT + " && python app.py")
+        print("        解决：cd 项目根目录 然后  set APP_PORT=" + PORT + " && python web/app.py")
         return False
 
 

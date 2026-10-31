@@ -1,23 +1,12 @@
-# 环境变量
-#
-# `.env` **现在是提交进仓库的**（本仓库为私有，团队需要开箱即用）：
-# 里面是团队共用的开发密钥，clone 下来就能直接跑，不用再找人要 key。
-#
-# 但每个人可能需要**自己的**配置（换自己的 key 测额度、改超时、临时开口令等）：
-# 把这些写进 `.env.local`，它会覆盖 `.env` 里的同名项，而 `.env.local` 不进版本库。
-# 加载顺序见 app.py：先 .env，再 .env.local（覆盖）。
-#
-# 安全前提：**仓库必须保持 Private**。一旦转为公开，.env 里的
-# DEEPSEEK_API_KEY 与 FLASK_SECRET_KEY 必须立即轮换 ——
-# 而且光是删掉文件不够，密钥会留在 git 历史里。
-.env.local
-.env.*.local
+# 环境变量（含 API Key，切勿提交）
+.env
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
 .venv/
+.venv.*/
 *.egg-info/
 dist/
 build/
@@ -36,33 +25,36 @@ literature.db
 *.db-wal
 *.db-shm
 
-# 账号备份（database.export_accounts 生成）。
-#
-# **这个文件要进版本库**，和 literature.db 的处理相反 —— 两者目的不同：
-#   literature.db  二进制、体积大、含全部业务数据（收藏/对话/工作流），不适合进库
-#   accounts.json  只有账号名 + bcrypt 哈希，很小，正是为了"账号跟着项目走"
-#
-# 它存在的意义就是：换台机器、换个目录、或者库文件丢了，账号还能恢复。
-# 如果把它也忽略掉，这个设计就完全失效了（登录时会先查 literature.db，
-# 再查这份文件），所以这里**故意不**加进忽略列表。
-#
-# 安全上可以接受：password 字段是 bcrypt 哈希，不是明文密码；
-# 而且能读到这份文件的人本来也能读到整个仓库。
-# 唯一的写入临时文件仍忽略：
-accounts.json.tmp
-
 # 测试跑出来的临时库（tests/ 下的用例会建这些文件）
 tests/_tmp_*.db
-
-# pip 在**当前工作目录**留下的临时目录（PyCharm/IDE 里装依赖时会出现，空的）
-pip-build-tracker-*
-pip-ephem-wheel-cache-*
-pip-install-*
-pip-unpack-*
-
+# 有些环境 TEMP 不可写，测试临时文件会退回到项目根；统一忽略
+_tmp_*
+_test_accounts.json
 # 真机跑出来的报告产物
 tests/live_report.md
 
 # OS
 .DS_Store
 Thumbs.db
+
+# ── 分发/自检产物（不该进版本库，也不该进压缩包）─────────────
+诊断结果.txt
+拿到先看这个.txt
+*.zip
+_bat*.log
+_srv*.log
+_app.log
+_edge_*
+*.err
+_backup_*/
+# 账号探针副本（含 bcrypt 哈希，测试遗留）
+_probe_*.json
+# 账号文件（含密码哈希与头像，别提交、别外传）
+accounts.json
+accounts.json.tmp
+accounts.json.broken
+
+# ── 朗读（TTS）─────────────────────────────────────────────
+# 合成缓存：同一段话重听直接读文件，按 (音色+语速+正文) 的 sha1 命名。
+# 都是 edge-tts 现场合成的，换台机器重新生成即可。
+tts_cache/

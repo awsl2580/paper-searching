@@ -16,7 +16,13 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 测试环境自洽：不依赖 .env，也不要有网络/限流副作用
+os.environ.setdefault("FLASK_SECRET_KEY", "0123456789abcdef" * 4)
+os.environ.setdefault("DEEPSEEK_RPM", "6000")   # 用例里不要因为限流而 sleep
+os.environ.setdefault("MCP_TRANSPORT", "inproc")
+os.environ.setdefault("AI4S_MAX_ITERATIONS", "1")
 sys.path.insert(0, ROOT)
+import paths  # noqa: E402,F401  （分类后的源码目录，见项目根 paths.py）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("DEEPSEEK_API_KEY", "sk-dummy")
 os.environ.setdefault("S2_MIN_INTERVAL", "0")
@@ -297,7 +303,7 @@ ok("纯文本时不强行抬高 max_tokens（保持原行为）", mt2 is None, m
 # 结果命中了我自己文档字符串里写的 "open(...,'w'/'wb')" 这句话 —— 假阳性。
 import ast  # noqa: E402
 
-_att_src = open(os.path.join(ROOT, "attachments.py"), encoding="utf-8").read()
+_att_src = open(os.path.join(ROOT, "core", "attachments.py"), encoding="utf-8").read()
 _open_calls = [n.lineno for n in ast.walk(ast.parse(_att_src))
                if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "open"]
 ok("attachments.py 里没有任何 open() 调用（图片不落盘）",

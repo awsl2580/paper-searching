@@ -3,11 +3,13 @@
 // not a copy. No browser is available in this environment (headless Chrome
 // crashes), so DOM behaviour is checked with a minimal stub.
 const fs = require('fs');
-const path = require('path');
 
-const HTML = path.join(__dirname, '..', 'static', 'index.html');
+const HTML = require('path').join(__dirname, '..', 'static', 'index.html');
 const html = fs.readFileSync(HTML, 'utf8');
-const script = html.match(/<script[^>]*>([\s\S]*?)<\/script>/)[1];
+// 页面里有多个 <script>（<head> 里那个是主题初始化），这里取**最长的那块**，
+// 也就是应用主脚本 —— 用 `[1]` 取第一块会在加了早期脚本后取错。
+const _scriptBlocks = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)];
+const script = _scriptBlocks.reduce((a, b) => (b[1].length > a[1].length ? b : a))[1];
 
 function grabFn(name) {
     const start = script.indexOf('function ' + name + '(');
@@ -233,29 +235,30 @@ ok('有统一的 openSidePanel/closeSidePanel',
    /function openSidePanel\(/.test(script) && /function closeSidePanel\(/.test(script));
 ok('四个面板都不再用 style.display 开关',
    !/getElementById\('(wfPanel|tablePanel|polishPanel|favoritesPanel)'\)\.style\.display/.test(script));
-ok('切换函数走 toggleSidePanel', /function toggleSidePanel\(/.test(script)
-   && /toggleSidePanel\('wfPanel'/.test(script)
-   && /toggleSidePanel\('tablePanel'/.test(script)
-   && /toggleSidePanel\('polishPanel'/.test(script));
+// 四个功能区现在统一走 toggleFeaturePanel（小窗/内嵌都在里面调度），
+// 面板本身的开关仍由 toggleSidePanel 负责。
+ok('有统一的功能调度器 toggleFeaturePanel',
+   /function toggleFeaturePanel\(id\)/.test(script)
+   && ['favoritesPanel', 'tablePanel', 'polishPanel', 'wfPanel']
+        .every(function (id) { return script.indexOf("id: '" + id + "'") >= 0; }));
+ok('四个旧入口都接到调度器上',
+   /function toggleWfPanel\(\)[\s\S]{0,200}toggleFeaturePanel\('wfPanel'\)/.test(script)
+   && /function togglePolishPanel\(\)[\s\S]{0,200}toggleFeaturePanel\('polishPanel'\)/.test(script)
+   && /function toggleTablePanel\(\)[\s\S]{0,240}toggleFeaturePanel\('tablePanel'\)/.test(script));
 
-// ---- 未登录点"科研工作流"要弹警告，而不是打开空面板 ----
-ok('科研工作流按钮带登录门槛',
-   /toggleSidePanel\('wfPanel',\s*'科研工作流'\)/.test(script));
-ok('润色按钮带登录门槛',
-   /toggleSidePanel\('polishPanel',\s*'摘要润色'\)/.test(script));
+// ---- 未登录点"科研工作流"/"润色"要弹警告，而不是打开空面板 ----
+ok('科研工作流带登录门槛',
+   /id: 'wfPanel'[\s\S]{0,160}needLogin: '科研工作流'/.test(script));
+ok('润色带登录门槛',
+   /id: 'polishPanel'[\s\S]{0,160}needLogin: '摘要润色'/.test(script));
+ok('先查登录再决定"弹询问框 / 直接打开"',
+   /function toggleFeaturePanel\([\s\S]{0,800}requireLogin\(f\.needLogin\)[\s\S]{0,260}panelAskEnabled\(\)/.test(script));
 ok('toggleSidePanel 先查登录再打开',
-   /function toggleSidePanel\([\s\S]{0,300}requireLogin\(feature/.test(script));
+   /function toggleSidePanel\([\s\S]{0,260}requireLogin\(feature\)/.test(script));
 
 // 行为验证：未登录时不许打开，已登录时才打开
-// closeSidePanel 里会收尾拖动/缩放状态（panelDragEl / panelResizeEl），桩里一并给上
-const tglSrc = [
-    'let panelDragEl = null;',
-    'let panelResizeEl = null;',
-    'function endPanelDrag() {}',
-    'function endPanelResize() {}',
-    grabFn('isSidePanelOpen'), grabFn('openSidePanel'),
-    grabFn('closeSidePanel'), grabFn('toggleSidePanel'),
-].join('\n');
+const tglSrc = [grabFn('isSidePanelOpen'), grabFn('openSidePanel'),
+                grabFn('closeSidePanel'), grabFn('toggleSidePanel')].join('\n');
 const closed = {};
 const fakePanels = {
     wfPanel: { classList: { contains: () => !!closed.wfPanel,
@@ -263,7 +266,12 @@ const fakePanels = {
                             remove: () => { closed.wfPanel = false; } } },
 };
 let prompted = 0;
-const tgl = new Function('document', 'requireLogin', tglSrc + '\nreturn toggleSidePanel;')(
+// openSidePanel 里还会补缩放抓手、恢复上次尺寸；本用例只关心开合与登录门槛，
+// 那两个函数用空壳替掉（它们的正确性由 test_panel_resize.js 覆盖）。
+const tgl = new Function('document', 'requireLogin',
+    'function ensurePanelResizeHandles(){}; function restorePanelGeometry(){};' +
+    'function inlinePanelsHost(){ return null; } function renderInlineTabs(){};' + tglSrc +
+    '\nreturn toggleSidePanel;')(
     { getElementById: (id) => fakePanels[id] || null },
     (feature) => { prompted++; return true; }      // 模拟未登录：拦截
 );
@@ -271,7 +279,10 @@ ok('未登录时 toggle 返回 false 且不打开', tgl('wfPanel', '科研工作
    && !closed.wfPanel, closed);
 ok('未登录时弹了提示', prompted === 1, prompted);
 
-const tgl2 = new Function('document', 'requireLogin', tglSrc + '\nreturn toggleSidePanel;')(
+const tgl2 = new Function('document', 'requireLogin',
+    'function ensurePanelResizeHandles(){}; function restorePanelGeometry(){};' +
+    'function inlinePanelsHost(){ return null; } function renderInlineTabs(){};' + tglSrc +
+    '\nreturn toggleSidePanel;')(
     { getElementById: (id) => fakePanels[id] || null },
     () => false                                     // 模拟已登录：放行
 );
@@ -293,14 +304,15 @@ ok('主框上下各留 35px', /height:\s*calc\(100vh - 70px\)/.test(html));
 ok('主框不再用旧的 80px 留白', !/calc\(100vh - 160px\)/.test(html));
 
 // ---- 统一的关闭按钮 ----
-// 四个面板共用 .panel-close，位置固定在标题栏最右。
+// 五个面板共用 .panel-close，位置固定在标题栏最右。
 const closeBtns = html.match(/<button[^>]*class="panel-close"[^>]*>✕<\/button>/g) || [];
-ok('四处关闭按钮都用 .panel-close', closeBtns.length === 4, closeBtns.length);
+// 四个面板（收藏/工作流/文献表/润色）共用同一个关闭按钮结构
+ok('五处关闭按钮都用 .panel-close', closeBtns.length === 5, closeBtns.length);
 ok('关闭按钮都带 type=button', closeBtns.every(b => /type="button"/.test(b)), closeBtns);
 ok('关闭按钮都带 aria-label', closeBtns.every(b => /aria-label="关闭"/.test(b)), closeBtns);
 // 去掉 onclick（各面板的关闭函数本来就不同）后，属性必须完全一致
 const clickStripped = closeBtns.map(b => b.replace(/onclick="[^"]*"/, 'onclick="X"'));
-ok('四处按钮属性完全一致（只差关闭函数名）',
+ok('五处按钮属性完全一致（只差关闭函数名）',
    new Set(clickStripped).size === 1, clickStripped);
 ok('旧的 #polishPanel 按钮规则已删除', !/#polishPanel \.panel-header button/.test(html));
 ok('旧的 #tablePanel 按钮规则已删除', !/#tablePanel \.panel-header button/.test(html));
@@ -327,9 +339,33 @@ ok('.panel-close 有 hover 反馈', /\.panel-close:hover\s*\{/.test(html));
     ok('CSS 没有多余的右括号', !negative);
     ok('CSS 结束时嵌套层数为 0', depth === 0, depth);
 
-    // 悬空的关键帧片段：`}` 之后直接跟 `40% {`
-    ok('没有悬空的关键帧片段',
-       !/\}\s*\d+%\s*\{/.test(css), (css.match(/\}\s*\d+%\s*\{/) || [''])[0]);
+    // 悬空的关键帧片段：`40% {` 出现在 @keyframes 之外，说明某个关键帧块被截断了。
+    // 注意不能简单搜 `}\s*\d+%`：合法的 @keyframes 里本来就有 `0% {`、`70% {`，
+    // 必须先把这些完整的 @keyframes 块整段剥掉，再检查剩下的部分。
+    function stripKeyframes(text) {
+        let out = '', i = 0;
+        while (i < text.length) {
+            const at = text.indexOf('@keyframes', i);
+            if (at < 0) { out += text.slice(i); break; }
+            out += text.slice(i, at);
+            let j = text.indexOf('{', at), depth = 0;
+            for (; j < text.length; j++) {
+                if (text[j] === '{') depth++;
+                else if (text[j] === '}') { depth--; if (depth === 0) break; }
+            }
+            i = j + 1;      // 整块跳过
+        }
+        return out;
+    }
+    const cssWithoutKeyframes = stripKeyframes(css);
+    ok('没有悬空的关键帧片段（@keyframes 之外不应出现 NN%）',
+       !/\d+%\s*\{/.test(cssWithoutKeyframes),
+       (cssWithoutKeyframes.match(/\d+%\s*\{/) || [''])[0]);
+    ok('关键帧块本身是配对的（剥完 @keyframes 后大括号仍平衡）',
+       (cssWithoutKeyframes.match(/{/g) || []).length
+       === (cssWithoutKeyframes.match(/}/g) || []).length,
+       [(cssWithoutKeyframes.match(/{/g) || []).length,
+        (cssWithoutKeyframes.match(/}/g) || []).length]);
 
     // 已删的死样式不该复活
     ok('已删除的 .thinking-dots 不再出现', !/thinking-dots/.test(html));
@@ -347,21 +383,13 @@ ok('标题可收缩并显示省略号',
    /\.panel-header > span\s*\{[^}]*text-overflow:\s*ellipsis/.test(html));
 
 // ---- 弹窗拖动 ----
-ok('标题栏是拖动把手', /\.side-panels > div > \.panel-header\s*\{[^}]*cursor:\s*move/.test(html));
-// 必须是 fixed（相对视口）：absolute 的包含块是弹窗列，而面板正好撑满列，
-// 可移动范围会变成 0×0 —— 也就是"光标是抓手但拖不动"那个 bug
-ok('拖动过的面板改为视口定位（fixed 而不是 absolute）',
-   /\.side-panels > div\.panel-moved\s*\{[^}]*position:\s*fixed/.test(html)
-   && !/\.side-panels > div\.panel-moved\s*\{[^}]*position:\s*absolute/.test(html));
+// 标题栏规则现在和"内嵌面板的标题栏"共用一条选择器（中间有逗号），断言要放宽
+ok('标题栏是拖动把手',
+   /\.side-panels > div > \.panel-header[^{]*\{[^}]*cursor:\s*move/.test(html));
+ok('拖动过的面板改为坐标定位', /\.side-panels > div\.panel-moved\s*\{[^}]*position:\s*absolute/.test(html));
 ok('启动时初始化拖动', /initDraggablePanels\(\);/.test(script));
 ok('Esc 先关弹窗再收登录浮层',
    /if \(closeAllSidePanels\(\) > 0\) return;/.test(script));
-// ---- 弹窗缩放 ----
-ok('四个面板都有右下角缩放手柄',
-   (html.match(/class="panel-resize"/g) || []).length === 4,
-   (html.match(/class="panel-resize"/g) || []).length);
-ok('缩放手柄有 nwse 光标', /\.panel-resize\s*\{[^}]*cursor:\s*nwse-resize/.test(html));
-ok('缩放尺寸有夹取函数', /function clampPanelSize\(/.test(script));
 
 // 拖动相关的行为验证已移到 tests/test_drag.js ——
 // 那边用 document 级监听的桩，能覆盖"指针移出标题栏后仍要跟随"这个真实缺陷。

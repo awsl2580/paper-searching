@@ -10,6 +10,11 @@ import sqlite3
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 测试环境自洽：不依赖 .env，也不要有网络/限流副作用
+os.environ.setdefault("FLASK_SECRET_KEY", "0123456789abcdef" * 4)
+os.environ.setdefault("DEEPSEEK_RPM", "6000")   # 用例里不要因为限流而 sleep
+os.environ.setdefault("MCP_TRANSPORT", "inproc")
+os.environ.setdefault("AI4S_MAX_ITERATIONS", "1")
 REAL = os.path.join(ROOT, "literature.db")
 # 副本放到确认可写的目录（见 tests/_writable_temp.py 的说明）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -18,6 +23,7 @@ from _writable_temp import temp_db_path  # noqa: E402
 COPY = temp_db_path("_tmp_migrate.db")
 
 sys.path.insert(0, ROOT)
+import paths  # noqa: E402,F401  （分类后的源码目录，见项目根 paths.py）
 os.environ.setdefault("DEEPSEEK_API_KEY", "sk-dummy")
 
 import database as db  # noqa: E402
