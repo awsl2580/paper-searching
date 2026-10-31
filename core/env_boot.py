@@ -1,4 +1,10 @@
-"""统一加载项目根目录的 `.env`（幂等，只做一次）。
+"""统一加载项目根目录的 `.env` / `.env.local`（幂等，只做一次）。
+
+配置加载的实际实现已经收进项目根的 `envconfig.py`（`.env` → `.env.local`，
+系统环境变量优先，`.env` 缺失时照 `.env.example` 自动生成）。本模块保留为
+一个薄适配层：`llm.py` / `providers` / `app.py` 等旧调用点仍然 import 它，
+这样不用在十几个文件里各改一遍。
+
 
 ## 这个文件为什么存在（踩过的坑）
 
@@ -52,12 +58,23 @@ def load_project_env(force=False):
         path = env_path()
         loaded = None
         try:
-            from dotenv import load_dotenv
-            if os.path.isfile(path):
-                load_dotenv(path, override=False)
+            # 优先走 envconfig：它同时处理 .env.local、系统环境变量优先级，
+            # 以及"新 clone 没有 .env 时自动生成一份"。
+            import envconfig
+            envconfig.ensure_env_file()
+            loaded_files = envconfig.load_env_files()
+            loaded = loaded_files[-1] if loaded_files else None
+            if loaded is None and os.path.isfile(path):
                 loaded = path
         except Exception:  # noqa: BLE001 - 可选依赖缺失不该影响启动
             loaded = None
+            try:
+                from dotenv import load_dotenv
+                if os.path.isfile(path):
+                    load_dotenv(path, override=False)
+                    loaded = path
+            except Exception:  # noqa: BLE001
+                pass
         _DONE["done"] = True
         _DONE["loaded"] = loaded
         return loaded

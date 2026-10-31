@@ -135,7 +135,7 @@ flowchart LR
 ├── providers/               # 多源文献检索（S2 / OpenAlex / Crossref / Europe PMC / DOAJ）
 ├── static/index.html        # 单文件前端（聊天 / 论文卡 / 文献表 / AI4S 工作流面板）
 ├── skills/                  # 6 个 SKILL.md（方法论，可分发、可评审）
-├── tests/                   # 1852 项检查，不依赖 pytest
+├── tests/                   # 2001 项检查，不依赖 pytest
 ├── docs/                    # 赛题对齐说明 / 公网部署 / Live2D 形象设定
 ├── scripts/
 │   ├── launch.py            # 启动器（一键启动.bat 调用；中文提示都在这里）
@@ -156,19 +156,26 @@ flowchart LR
 
 ## 四、快速开始
 
-### 1. 配置
+### 1. 配置（只需填自己的 API Key）
+
+`.env` **不进版本库**（放 Key 与会话密钥），新 clone 下来没有这个文件也没关系：
+程序启动时会照 `.env.example` 自动生成一份，会话密钥取随机值。
+
+最省事的方式是启动后点页面右上角的「🔑 填写 API Key」，粘贴保存即可，**立刻生效、不用重启**。
+也可以手工复制模板并填写：
 
 ```bash
 cp .env.example .env
 ```
 
-在 `.env` 里填三项（其余可留空）：
-
 ```ini
 DEEPSEEK_API_KEY=<DeepSeek API Key>        # https://platform.deepseek.com/api_keys
-FLASK_SECRET_KEY=<随机 64 位十六进制>        # python -c "import secrets; print(secrets.token_hex(32))"
+FLASK_SECRET_KEY=<随机 64 位十六进制>        # 不填会在首次启动时自动生成
 CROSSREF_MAILTO=<你的邮箱>                 # 可选但建议：Crossref 礼貌池并发 3 而不是 1
 ```
+
+配置加载顺序：`.env` → `.env.local`（后者覆盖前者）→ 系统环境变量优先。
+只想临时改某一项时用 `.env.local`，不要动 `.env`。
 
 ### 2. 启动
 
@@ -193,7 +200,8 @@ python web/app.py
 ==============================================================
 ```
 
-没配 DeepSeek API Key 时服务会直接给出可照做的配置提示，不会悄悄改用别家模型。
+没配 DeepSeek API Key 时站点照常打开：右上角「🔑 填写 API Key」填完即可；
+聊天 / 润色 / 科研工作流会引导你先填 Key，不会甩一屏报错，也不会悄悄改用别家模型。
 
 #### 第一次启动会先装依赖（屏幕上刷进度是正常的）
 
@@ -234,7 +242,7 @@ python tests/run_all.py
 
 **故意不依赖 pytest**，只用标准库 —— 每个用例都是独立脚本，跑完打印
 `N/M checks passed` 并以退出码表示成败，在没装任何测试框架的机器上（比如评委的环境）
-也能直接验证。当前 **28 个 Python 用例 + 13 个前端用例，共 1980 项检查全绿**（另 4 项「老库升级」检查只在已存在 `literature.db` 时执行）。
+也能直接验证。当前 **29 个 Python 用例 + 13 个前端用例，共 2001 项检查全绿**（另 4 项「老库升级」检查只在已存在 `literature.db` 时执行）。
 
 ---
 
@@ -714,7 +722,7 @@ GET  /api/tts/audio/<20位hex>.mp3    # 取音频（要登录）
 
 `rate` 支持 `-20% / -10% / +0% / +10% / +20%`（接口已通，设置面板暂时只暴露音色）。
 
-## 十一、测试（1980 项检查）
+## 十一、测试（2001 项检查）
 
 | 用例 | 覆盖 | 检查数 |
 |------|------|--------|
@@ -735,6 +743,7 @@ GET  /api/tts/audio/<20位hex>.mp3    # 取音频（要登录）
 | `test_streaming.py` | 流式推送（首个事件不等到最后）+ 抽取并发 | 12 |
 | `test_smoke.py` | 静态白名单、鉴权、跨用户隔离 | 40 |
 | `test_migration.py` | 老库升级补新表（含 research_memory）；无旧库时跳过 | 4 |
+| `test_env_config.py` | **环境变量加载**：`.env` / `.env.local` 被忽略、模板进库、缺失时自动生成、覆盖顺序、没有 Key 时的提示可照做 | 21 |
 | `test_bootstrap_env.py` | 启动引导：`pyvenv.cfg` 重定向、同/跨版本判断、**先建 `.venv.new` 再替换**、失败不弄丢原 venv | 27 |
 | `test_startup_deps.py` | 启动体验：缺依赖时 pip 输出**不再被吞**（有进度、有镜像重试、有手动命令兜底）、装完再验证一遍、**GBK 控制台重定向时 emoji 不再把启动打崩** | 16 |
 | `test_exposure.py` | 公网暴露面（源码不外泄/密钥/口令门禁） | 38 |

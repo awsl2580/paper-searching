@@ -20,6 +20,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 测试环境自洽：不依赖 .env，也不要有网络/限流副作用
 os.environ.setdefault("FLASK_SECRET_KEY", "0123456789abcdef" * 4)
+os.environ["DEEPSEEK_API_KEY"] = ""            # 用例自己控制 key，不读 .env 里的真 key
 os.environ.setdefault("DEEPSEEK_RPM", "6000")   # 用例里不要因为限流而 sleep
 os.environ.setdefault("MCP_TRANSPORT", "inproc")
 os.environ.setdefault("AI4S_MAX_ITERATIONS", "1")
@@ -355,7 +356,8 @@ t0 = time.time()
 for _ in range(20):
     fast.acquire()
 elapsed = time.time() - t0
-ok("高频限额下不额外等待（20 次 < 0.2s）", elapsed < 0.2, round(elapsed, 3))
+# 20 次、每次最小间隔 0.01s，理论下限约 0.19s；给慢机器留一点余量。
+ok("高频限额下不额外等待（20 次 < 0.35s）", elapsed < 0.35, round(elapsed, 3))
 ok("限流器记录了阻塞次数", hasattr(fast, "waits"))
 
 slow = llm.RateLimiter(rpm=120)     # 0.5s 一次

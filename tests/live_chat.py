@@ -15,11 +15,13 @@ os.environ.setdefault("MCP_TRANSPORT", "inproc")
 os.environ.setdefault("AI4S_MAX_ITERATIONS", "1")
 sys.path.insert(0, ROOT)
 import paths  # noqa: E402,F401  （分类后的源码目录，见项目根 paths.py）
-from dotenv import load_dotenv
-load_dotenv(os.path.join(ROOT, ".env"))
+# 用统一的加载逻辑：.env → .env.local（Key 可以只写在后者里，见 envconfig.py）
+import envconfig
+envconfig.load_env_files(ROOT)
 
-if not os.getenv("DEEPSEEK_API_KEY"):
-    print("SKIP  未配置 DEEPSEEK_API_KEY，无法真机跑")
+if not envconfig.api_key():
+    print("SKIP  没有 DEEPSEEK_API_KEY，跳过真机测试。")
+    print(f"      请写入：{envconfig.ENV_LOCAL_FILE}")
     sys.exit(0)
 
 import database as db

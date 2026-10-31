@@ -30,10 +30,12 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 import paths  # noqa: E402,F401
 
-# 统一从 env_boot 加载 .env（绝对路径 + 幂等，见 core/env_boot.py 的说明）
-from env_boot import load_project_env  # noqa: E402
+# 加载 .env → .env.local（与网页版共用同一套逻辑，见 envconfig.py）。
+# 这里不能用裸 load_dotenv()：它按当前工作目录找文件，换目录启动就静默读不到。
+import envconfig  # noqa: E402
 
-load_project_env()
+envconfig.ensure_env_file()
+envconfig.load_env_files()
 
 # ── 自动检查并安装依赖 ────────────────────────────────────
 REQUIRED_PACKAGES = {
@@ -95,7 +97,14 @@ DEFAULT_SYSTEM_PROMPT = """你是「DeepSeek AI4S 科学智能体」的命令行
 
 def build_agent():
     """按当前配置造一个带工具链的智能体。"""
-    llm.require_llm()
+    # Key 不随仓库分发，缺了会给出"写到哪个文件"的提示，而不是甩 traceback。
+    try:
+        envconfig.require_api_key("命令行版")
+    except RuntimeError as exc:
+        print("\n" + "=" * 64)
+        print(str(exc))
+        print("=" * 64 + "\n")
+        sys.exit(1)
     info = llm.model_info()
     tools = agent_tools.LITERATURE_TOOLS + agent_tools.COMPUTE_TOOLS
     return create_agent(

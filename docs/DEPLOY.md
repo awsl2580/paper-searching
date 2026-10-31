@@ -70,6 +70,9 @@ RuntimeError: FLASK_SECRET_KEY 未设置（或仍是示例里的默认值）
 python -c "import secrets; print('FLASK_SECRET_KEY=' + secrets.token_hex(32))"
 ```
 
+这条**写进 `.env`**（该文件不进版本库）。`.env` 不存在时程序会自动生成
+一份并填好随机值，通常不用管；只想临时改某一项就写 `.env.local`（优先级更高）。
+
 ### 2. 公网口令（可选，但强烈建议）
 
 本站暴露的是**共享的 DeepSeek 大模型额度**（`DEEPSEEK_API_KEY`）。域名一旦被转发出去，
@@ -127,6 +130,8 @@ python tests\test_exposure.py
 |------|------|
 | `ProxyFix(x_proto=1, x_host=1, x_for=1)` | 穿透工具在中间做了一层代理：浏览器访问的是 `https://xxx.natappfree.cc`，转发到本机却是 http。不加这层，Flask 以为自己是 http，生成绝对 URL 和判断 `is_secure` 都会出错 |
 | `.env` 用**绝对路径**加载 | 原来裸调 `load_dotenv()`，它按"当前工作目录"向上找。从别处启动（`python C:\...\web\app.py`、或在 IDE 里配了别的工作目录）就找不到，于是 API Key 缺失、会话密钥悄悄回退到公开默认值 —— 而且不报错。这个坑就是接公网时踩出来的 |
+| `.env` → `.env.local` 两层加载 | `.env` 不进库（放 Key 与会话密钥），`.env.local` 是可选的更高优先级覆盖文件。两层分开是为了"本机临时改一项"不用动主配置 |
+| 网页可直接填 API Key | `/api/config/api-key` 只改 `.env` 里的 `DEEPSEEK_API_KEY` 一行，保存后 `llm.api_key()` 立刻读到，不用重启；公网请求要求先登录，避免路人把站点 Key 换掉 |
 | `APP_HOST` / `APP_PORT` 可配 | 隧道转发的是它自己配置的本地端口，需要让服务去对齐 |
 
 ## 五、常见故障

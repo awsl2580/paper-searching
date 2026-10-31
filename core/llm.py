@@ -100,7 +100,15 @@ def _normalize_base(raw):
 BASE_URL = _normalize_base(_env("DEEPSEEK_BASE_URL", DEFAULT_BASE_URL))
 
 # DeepSeek API Key。不要求带 "Bearer " 前缀（代码自己会加）。
+# API_KEY 是 import 时的快照（测试/旧调用会直接改它）；
+# 真正发请求时走 api_key()，每次重新读环境变量 —— 这样网页上填完 Key
+# 立刻生效，不用重启，也不会被 import 时的空值锁死。
 API_KEY = _env("DEEPSEEK_API_KEY")
+
+
+def api_key():
+    """当前生效的 DeepSeek API Key（没有就返回空串）。"""
+    return _env("DEEPSEEK_API_KEY") or API_KEY
 
 # 限流：默认 60 次/分钟（DeepSeek 按账号动态限流，这里保守起步，留余量给重试）
 RPM = max(1, _env_int("DEEPSEEK_RPM", 60))
@@ -199,7 +207,7 @@ def backend():
     配了 DeepSeek API Key 就走 DeepSeek；没配就明确返回 None，
     由 `require_llm()` 给出可照做的配置提示，不做"假装能跑"的降级。
     """
-    if API_KEY:
+    if api_key():
         return "deepseek"
     return None
 
@@ -390,7 +398,7 @@ def _post_chat(payload, timeout=TIMEOUT):
     url = BASE_URL + "/chat/completions"
     headers = {
         "Content-Type": "application/json",
-        "Authorization": "Bearer " + API_KEY,
+        "Authorization": "Bearer " + api_key(),
     }
 
     attempts = max(1, _env_int("DEEPSEEK_MAX_RETRIES", 4))
@@ -668,7 +676,7 @@ def chat_model(kind="chat", temperature=0.0, max_tokens=None, streaming=False,
 
     kwargs = dict(
         model=model,
-        api_key=API_KEY,
+        api_key=api_key(),
         base_url=BASE_URL,
         temperature=temperature,
         timeout=TIMEOUT,
@@ -729,7 +737,7 @@ def probe():
     try:
         import requests
         resp = requests.get(BASE_URL + "/models",
-                            headers={"Authorization": "Bearer " + API_KEY},
+                            headers={"Authorization": "Bearer " + api_key()},
                             timeout=min(TIMEOUT, 20))
         if resp.status_code != 200:
             return {"ok": False, "status": resp.status_code, "body": (resp.text or "")[:200]}
@@ -801,7 +809,7 @@ def chat_model_name(kind="chat"):
 
 __all__ = [
     "BASE_URL", "PURPOSES", "MODEL_CATALOG", "SELECTABLE_MODELS", "model_catalog",
-    "is_selectable", "available", "backend", "call_json", "call_text",
+    "is_selectable", "available", "api_key", "backend", "call_json", "call_text",
     "chat", "chat_model", "chat_model_name", "check_models", "last_error",
     "http_stats", "loads_json", "model_fallbacks", "model_for", "model_info", "probe",
     "require_llm", "reset_rate_limit_waits", "thinking_mode_for",

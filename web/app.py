@@ -224,20 +224,16 @@ from functools import wraps
 from langchain.agents import create_agent
 from langchain_core.tools import tool
 
-# 自动加载 .env（如果存在）
-#
-# 这里**必须用绝对路径**，不能用裸 load_dotenv()：
-# 裸调用是按"当前工作目录"向上找 .env 的，从别处执行
-# （例如 python C:\...\AIagent2\AIagent1\app.py，或在 IDE 里配了别的工作目录）
-# 就会找不到，于是 API Key 缺失、会话密钥回退到公开的默认值 —— 而且不报错。
-# 这个坑是接公网域名时踩出来的：换个目录启动，签名密钥就悄悄变了。
-try:
-    from env_boot import load_project_env
-    load_project_env()
-except Exception:
-    # env_boot 只是加载 .env 的薄封装；真出问题也不该拦住启动，
-    # 环境变量直接写进系统也可以用。
-    pass
+# 加载环境变量（.env → .env.local，后者覆盖前者）。
+# 时间点很关键：必须在这之后的所有 `os.getenv(...)` 之前完成。
+# 细节见 envconfig.py —— 网页版 / 命令行版 / 真机脚本共用它，
+# 避免"从别的目录启动就读不到配置"这类坑各修各的。
+import envconfig       # noqa: E402
+# `.env` 不进版本库（里面会有 API Key），新 clone / 换台机器时它不存在。
+# 先确保它被生成出来，否则下面读 FLASK_SECRET_KEY 会直接拒绝启动 ——
+# 用户会卡在"连页面都打不开，更没法在页面上填 Key"。
+envconfig.ensure_env_file()
+envconfig.load_env_files()
 
 TIMEOUT = int(os.getenv("API_TIMEOUT", "30"))
 S2_USER_AGENT = os.getenv("S2_USER_AGENT", "LiteratureSearchAssistant/1.0 (personal research tool)")
@@ -1491,6 +1487,124 @@ def get_current_user():
 
 
 # ═══════════════════════════════════════════════════════════════
+#  路由：API Key 配置
+#
+#  为什么要有这一段：Key 不随仓库分发，以前缺 Key 时服务直接退出，
+#  打开页面只看到控制台一屏红字。现在改成"先让站点起来"，由页面右上角的
+#  「填写 API Key」按钮引导填写 —— 对第一次上手的人友好得多。
+# ═══════════════════════════════════════════════════════════════
+
+def _mask_api_key(key: str) -> str:
+    """只回显头尾：够用户认出"填的是哪一把"，又不会把整把 Key 送到前端。"""
+    if not key:
+        return ""
+    if len(key) <= 12:
+        return key[:3] + "****"
+    return f"{key[:6]}…{key[-4:]}"
+
+
+def _api_key_editable() -> bool:
+    """这笔请求能不能改站点的 API Key。
+
+    本机访问（127.0.0.1 / ::1）直接放行 —— 那就是跑服务的人自己在填。
+    从公网/内网穿透过来的请求要求先登录：否则任何拿到链接的人都能把站点
+    用的 Key 换成自己的（轻则站点不可用，重则流量走别人的账单）。
+    """
+    if (request.remote_addr or "") in ("127.0.0.1", "::1"):
+        return True
+    return "user_id" in session
+
+
+def _write_api_key(key: str) -> str:
+    """把 Key 写进 `.env`（该文件不进版本库），返回文件路径。
+
+    两件事一起做：
+      1. `.env` 不存在就先生成一份（`envconfig.ensure_env_file`）——
+         所以新机器上"填完 Key 就能跑"，不用手工复制 `.env.example`；
+      2. 只替换 `DEEPSEEK_API_KEY` 那一行，文件里的注释和其它配置原样保留。
+
+    另外，若 `.env.local` 里也写了这一项，要跟着一起改：它优先级更高，
+    不改的话会继续盖住新 Key，页面显示"保存成功"实际却没生效。
+    """
+    env_file, _created = envconfig.ensure_env_file()
+
+    def upsert(target: str, append_if_missing: bool) -> None:
+        lines: list[str] = []
+        if os.path.exists(target):
+            with open(target, "r", encoding="utf-8") as f:
+                lines = f.read().splitlines()
+
+        new_line = f"DEEPSEEK_API_KEY={key}"
+        for i, old in enumerate(lines):
+            if re.match(r"^\s*(export\s+)?DEEPSEEK_API_KEY\s*=", old):
+                lines[i] = new_line
+                break
+        else:
+            if not append_if_missing:
+                return
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.append("# 由网页右上角的「填写 API Key」写入（.env 不进版本库）")
+            lines.append(new_line)
+
+        with open(target, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(lines) + "\n")
+
+    upsert(env_file, append_if_missing=True)
+    if os.path.exists(envconfig.ENV_LOCAL_FILE):
+        upsert(envconfig.ENV_LOCAL_FILE, append_if_missing=False)
+    return env_file
+
+
+@app.get("/api/config")
+def get_config():
+    """前端启动时问一次：Key 配了没、配的是哪一把（只给头尾）。"""
+    key = envconfig.api_key()
+    return jsonify({
+        "success": True,
+        "api_key_set": bool(key),
+        "api_key_hint": _mask_api_key(key),
+        "api_key_editable": _api_key_editable(),
+        "model": llm_layer.model_for("chat"),
+    })
+
+
+@app.post("/api/config/api-key")
+def save_api_key():
+    if not _api_key_editable():
+        return jsonify({"success": False,
+                        "error": "请先登录后再填写 API Key"}), 403
+
+    data = request.get_json(force=True, silent=True) or {}
+    key = (data.get("api_key") or "").strip().strip('"').strip("'").strip()
+
+    if not key:
+        return jsonify({"success": False, "error": "请填写 API Key"}), 400
+    if not key.startswith("sk-") or len(key) < 20 or any(c.isspace() for c in key):
+        return jsonify({
+            "success": False,
+            "error": "格式不对：DeepSeek 的 Key 以 sk- 开头，后面是一长串字母数字",
+        }), 400
+
+    try:
+        path = _write_api_key(key)
+    except OSError as e:
+        return jsonify({"success": False, "error": f"写入 .env 失败：{e}"}), 500
+
+    # 立刻生效：llm.api_key() 每次请求都重读环境变量，不用重启服务。
+    os.environ["DEEPSEEK_API_KEY"] = key
+    # 同步一下 import 时的快照，兼容仍直接读 llm.API_KEY 的旧代码。
+    llm_layer.API_KEY = key
+
+    return jsonify({
+        "success": True,
+        "message": f"已保存到 {os.path.basename(path)}，立即生效（无需重启）",
+        "api_key_set": True,
+        "api_key_hint": _mask_api_key(key),
+    })
+
+
+# ═══════════════════════════════════════════════════════════════
 #  路由：搜索历史
 # ═══════════════════════════════════════════════════════════════
 
@@ -1774,6 +1888,10 @@ def polish_abstract():
       2. 服务端算一次相似度，**太像就带着"上次几乎没改"的提醒重试一次**；
       3. 顺带让模型给出 3 条"改动说明"，界面上能看出到底动了哪里。
     """
+    if not llm_layer.available():
+        return jsonify({"error": "还没有填写 DeepSeek API Key",
+                        "need_api_key": True}), 400
+
     data = request.get_json(force=True, silent=True) or {}
     abstract = data.get('abstract', '').strip()
     style = (data.get('style') or 'academic').strip()
@@ -2153,6 +2271,20 @@ def chat_abort():
 
 @app.post("/api/chat")
 def chat():
+    # 没填 Key 时不要甩一条报错给用户：发一个 need_api_key 事件，
+    # 前端收到后直接弹出「填写 API Key」面板（见 index.html 的 sendMessage）。
+    if not llm_layer.available():
+        payload = json.dumps({"type": "need_api_key",
+                              "message": "还没有填写 DeepSeek API Key"},
+                             ensure_ascii=False)
+        return Response(
+            iter([f"data: {payload}\n\n"]),
+            headers={"Content-Type": "text/event-stream; charset=utf-8",
+                     "Cache-Control": "no-cache, no-transform",
+                     "X-Accel-Buffering": "no"},
+            mimetype="text/event-stream",
+        )
+
     data = request.get_json(force=True, silent=True) or {}
     message = (data.get("message") or "").strip()
     history = data.get("history") or []
@@ -2800,6 +2932,10 @@ def run_workflow():
         done     结束：{status, workflow_id}
         error    出错
     """
+    if not llm_layer.available():
+        return jsonify({"error": "还没有填写 DeepSeek API Key",
+                        "need_api_key": True}), 400
+
     data = request.get_json(force=True, silent=True) or {}
     goal = (data.get("goal") or "").strip()
     resume_id = data.get("workflow_id")
@@ -3246,8 +3382,14 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"⚠️ 数据库初始化警告: {e}")
 
-    # 模型自检：只认 DeepSeek API Key；没配就给出可照做的配置提示。
-    llm_layer.require_llm()
+    # 没有 API Key 也照常启动：站内检索之外的功能本来就能用，而且页面右上角
+    # 有「填写 API Key」按钮，填完立刻生效。
+    if not envconfig.api_key():
+        print("\n" + "-" * 54)
+        print("   ⚠️  还没有填写 DeepSeek API Key")
+        print("   网页可以正常打开；点右上角「🔑 填写 API Key」填入即可，")
+        print("   保存后立刻生效，不需要重启服务。")
+        print("-" * 54 + "\n")
 
     host = (os.getenv("APP_HOST") or "127.0.0.1").strip()
     try:

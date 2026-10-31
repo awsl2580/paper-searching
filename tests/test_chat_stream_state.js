@@ -35,7 +35,8 @@ function ok(name, cond, got) {
 ok('聊天流收到 done 就结束这一轮（不等连接自己关掉）',
    /data\.type === 'done'[\s\S]{0,400}finished = true;/.test(script));
 ok('跳出的是最外层读取循环',
-   /if \(finished\) break;\s*\}\s*\n\s*\/\/ 这一轮的内容要不要留在/.test(script));
+   // need_api_key 与 done 都在最外层读取循环里 break；后者之后直接进入收尾。
+   /if \(needKey\) \{ try \{ await reader\.cancel\(\); \} catch \(e\) \{\} break; \}[\s\S]{0,160}if \(finished\) break;/.test(script));
 ok('解锁在 finally 里（任何异常路径都必须解锁）',
    /finally \{[\s\S]{0,1200}releaseChatLoading\(requestId\)/.test(script));
 ok('解锁要校验这一轮的身份（旧轮不许动新一轮）',

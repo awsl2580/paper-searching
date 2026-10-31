@@ -1,5 +1,19 @@
-# 环境变量（含 API Key，切勿提交）
+# 环境变量
+#
+# `.env` **不进版本库**：它装着你的 DEEPSEEK_API_KEY 和会话签名密钥，
+# 任何一项泄露都不该进 git（Key 会被刷额度，密钥能被用来伪造登录）。
+# 模板与全部可配置项的说明在 `.env.example`（那个文件进库）。
+#
+# 新 clone 下来没有 `.env` 也不用慌：程序启动时会照 `.env.example` 自动生成
+# 一份（会话密钥取随机值），网页右上角「填写 API Key」也会直接写进这个文件。
+#
+# `.env.local` 是可选的更高优先级覆盖文件（想临时改某一项时用），同样不进库。
+# 加载顺序：.env → .env.local（后者覆盖），系统环境变量优先级最高。
+#
+# 注意：已经提交过的旧 `.env` 还留在 git 历史里 —— 轮换过密钥才算真的清干净。
 .env
+.env.local
+.env.*.local
 
 # Python
 __pycache__/
@@ -49,10 +63,13 @@ _edge_*
 _backup_*/
 # 账号探针副本（含 bcrypt 哈希，测试遗留）
 _probe_*.json
-# 账号文件（含密码哈希与头像，别提交、别外传）
-accounts.json
+# accounts.json 本身要进库：它是"账号跟着项目走"的落盘文件（password 只是
+# bcrypt 哈希）。只忽略写入时的临时/损坏副本。
 accounts.json.tmp
 accounts.json.broken
+
+# 权限诊断报告（排查 Windows 文件权限时生成）
+_acl_reports/
 
 # ── 朗读（TTS）─────────────────────────────────────────────
 # 合成缓存：同一段话重听直接读文件，按 (音色+语速+正文) 的 sha1 命名。

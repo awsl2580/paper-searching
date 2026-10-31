@@ -33,6 +33,7 @@ PY_TESTS = [
     ("工作流流式推送与抽取并发", "test_streaming.py"),
     ("端到端冒烟（静态白名单/鉴权/跨用户隔离）", "test_smoke.py"),
     ("升级检查（给老库补新表）", "test_migration.py"),
+    ("环境变量加载（.env → .env.local 覆盖）", "test_env_config.py"),
     ("启动引导（venv 跟随本机 Python：重定向/重建）", "test_bootstrap_env.py"),
     ("启动体验（缺依赖可见/镜像重试/重定向不崩编码）", "test_startup_deps.py"),
     ("公网暴露前安全检查（源码不外泄/密钥/口令门禁）", "test_exposure.py"),
@@ -61,13 +62,23 @@ JS_TESTS = [
     ("卡片划词解释（选区判定/浮层按钮/右键/上下文截取）", "test_term_selection.js"),
 ]
 
+# 子进程统一给一份"够用的"环境：
+#   * `.env` 不进版本库，新机器上可能没有；app.py 会自动生成一份，但测试里
+#     直接给一份确定的值，免得用例依赖"生成出来的随机会话密钥"；
+#   * Windows 上子进程的 stdout 默认是 GBK，打印带 emoji 的启动信息会抛
+#     UnicodeEncodeError —— 这里用 PYTHONIOENCODING 统一成 utf-8。
+CHILD_ENV = dict(os.environ)
+CHILD_ENV.setdefault("DEEPSEEK_API_KEY", "sk-dummy")
+CHILD_ENV.setdefault("FLASK_SECRET_KEY", "test-secret-key-" + "0" * 40)
+CHILD_ENV["PYTHONIOENCODING"] = "utf-8"
+
 failures = []
 print("=" * 68)
 for title, fname in PY_TESTS:
     print(f"\n▶ {title}\n  {fname}")
     r = subprocess.run([sys.executable, os.path.join(HERE, fname)],
                        cwd=ROOT, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+                       encoding="utf-8", errors="replace", env=CHILD_ENV)
     out = (r.stdout or "") + (r.stderr or "")
     tail = [ln for ln in out.splitlines() if ln.startswith("FAIL") or "checks passed" in ln]
     for ln in tail:
@@ -82,7 +93,7 @@ for title, fname in JS_TESTS:
     try:
         r = subprocess.run(["node", os.path.join(HERE, fname)],
                            cwd=ROOT, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace")
+                           encoding="utf-8", errors="replace", env=CHILD_ENV)
     except FileNotFoundError:
         print("  SKIP  未安装 node")
         continue
