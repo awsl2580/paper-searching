@@ -96,6 +96,19 @@ ITERATE_ON_REJECT = (os.getenv("AI4S_ITERATE_ON_REJECT", "0") or "0").strip() in
 # （长尾文献的边际信息量很低，而且综述正文里的引用编号本来就集中在前面）。
 BRIEF_PAPERS = max(5, int(os.getenv("AI4S_BRIEF_PAPERS", "20") or 20))
 
+# 综述一次写完时的输出额度。原来的 4000 是**不够的**（实测踩坑）：
+# `max_tokens` 是"思考内容 + 正文"共用的，第 14 次运行里 flash 先思考了 2698
+# token，正文写到第 3 节就被砍断（finish_reason=length），JSON 少了收尾括号，
+# 两轮重试都是同一个预算 → 整步必挂。5 节中文正文约 3500-4500 token，
+# 加上思考要 6000+，所以默认给 7000（上限 8192），可用 AI4S_SYNTH_TOKENS 覆盖。
+SYNTH_TOKENS = min(8192, max(2400, int(os.getenv("AI4S_SYNTH_TOKENS", "7000") or 7000)))
+
+# 逐节撰写时单节的额度。一节 300-700 字（约 700-1200 token），
+# 但**思考内容也吃这份预算**：实测 1600 时，思考一多就"只有思考、正文为空"，
+# 那一节直接丢掉。3000 给思考留了余量；仍不够时 `call_json` 的重试还会再抬 1.6 倍。
+SYNTH_SECTION_TOKENS = min(6000, max(800, int(
+    os.getenv("AI4S_SYNTH_SECTION_TOKENS", "3000") or 3000)))
+
 # 计算步骤里模型提出的计算任务上限（防跑飞）
 MAX_MODEL_TASKS = 6
 
@@ -286,7 +299,41 @@ SYNTH_PROMPT = """你是学术综述撰写助手（AI4S 的"写"环节）。根�
 - "gaps"：2-3 条研究空白或不足（每条一句话）
 - "caveat"：一句话说明本篇综述的局限（文献量、来源覆盖等）
 
+⚠️ 每节正文控制在 300-700 字。**宁可写得精炼，也必须把 JSON 写完整**
+（输出被截断等于全篇作废）。不要在任何字段里写换行以外的排版符号。
+
 只输出 JSON。"""
+
+# 整篇一次写不成时的退路：一次只写一节。
+# 为什么需要它：一次要输出 5 节 + 共识 + 空白 + 局限，输出额度一旦被
+# "思考内容"吃掉，JSON 就会在中间被砍断（见 SYNTH_TOKENS 的注释）。
+# 拆成一节一次，单次输出小、被截断的概率低，而且**成功的节可以直接留下**，
+# 失败的那节再单独重试，不必让整步归零。
+SYNTH_SECTION_PROMPT = """你在为综述撰写**其中的一节**（AI4S 的"写"环节）。
+用户会给你：研究目标、综述的完整章节列表、当前要写的章节标题、以及文献要点。
+
+硬性约束：
+1. **只写这一节**，不要写其它章节，也不要重复章节标题。
+2. **只能依据给定文献**：不得引入列表之外的论文、作者、年份、数字；
+   引用用 [序号]，序号必须来自给定列表。
+3. 不要逐篇复述摘要 —— 按主题/方法归类，写成连贯的段落。
+4. 如果给了共识/空白/验证结论，可以作为语境，但不要把仿真值说成实测值。
+5. 正文 300-700 字，中文，学术但平实。写不下就压缩，**不要中途截断**。
+
+输出 JSON：{"heading": "本章节标题", "body": "本节正文（可含 [序号] 引用）"}
+只输出 JSON，不要解释文字或 markdown 代码块。"""
+
+# 逐节写完之后补的"共识 / 空白 / 局限"（整篇那次没拿到时才用）。
+# 输入是已经写好的章节摘要，所以输出很小，不会再次被截断。
+SYNTH_SUMMARY_PROMPT = """你在为综述收尾（AI4S 的"写"环节）。已经写好的章节内容见输入。
+请据此归纳，**不要引入新的文献或数字**。
+
+输出 JSON：
+- "consensus"：2-4 条当前文献的共识或主流做法（每条一句话）
+- "gaps"：2-3 条研究空白或不足（每条一句话）
+- "caveat"：一句话说明本篇综述的局限（文献量、来源覆盖等）
+
+只输出 JSON，不要解释文字或 markdown 代码块。"""
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -310,7 +357,7 @@ def _loads_lenient(raw):
 
 
 def _role_json(role_key, task, payload, goal="", max_tokens=1600, temperature=0.0,
-               prompt_override=None, with_skills=True):
+               prompt_override=None, with_skills=True, retries=2):
     """以某个角色的提示词跑一次 JSON 调用。
 
     两个坑（都是真机跑出来的）：
@@ -336,7 +383,8 @@ def _role_json(role_key, task, payload, goal="", max_tokens=1600, temperature=0.
             base = base + "\n\n" + block
     content = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
     data = _call_json(base, content, max_tokens=max_tokens,
-                      temperature=temperature, kind=spec["model"])
+                      temperature=temperature, kind=spec["model"],
+                      retries=retries)
     return data if isinstance(data, dict) else None
 
 
@@ -1697,17 +1745,8 @@ def step_verify(cfg, papers, hypothesis, experiment, computation, emit,
 #  ⑧ 写：综述生成
 # ═══════════════════════════════════════════════════════════════
 
-def step_synthesize(cfg, papers, emit, sections=None, stop=None,
-                    hypothesis=None, experiment=None, computation=None,
-                    verify=None):
-    if not papers:
-        raise RuntimeError("没有文献，无法生成综述")
-    if stop and stop():
-        emit("收到中断，未开始撰写综述")
-        return {"sections": [], "consensus": [], "gaps": [], "caveat": "",
-                "interrupted": True}
-    emit(f"阅读 {len(papers)} 篇并撰写综述")
-
+def _synth_brief(papers):
+    """喂给模型的文献要点：只留论证需要的字段，摘要压到 130 字。"""
     brief = []
     for i, p in enumerate(papers[:BRIEF_PAPERS], 1):
         ex = p.get("extract") or {}
@@ -1725,7 +1764,12 @@ def step_synthesize(cfg, papers, emit, sections=None, stop=None,
             # 摘要在这一步只是补充语境（实测 15380 字的输入里有 1/3 是摘要）
             "abstract": (p.get("abstract") or "")[:130],
         })
+    return brief
 
+
+def _synth_payload(cfg, brief, sections, hypothesis, experiment, computation,
+                   verify):
+    """整篇撰写用的输入。逐节撰写会在此基础上换掉「章节」字段。"""
     payload = {
         "研究目标": cfg.get("topic"),
         "重点关注": cfg.get("focus"),
@@ -1761,44 +1805,301 @@ def step_synthesize(cfg, papers, emit, sections=None, stop=None,
             "fixes": verify.get("fixes"),
             "replay": verify.get("replay"),
         }
+    return payload
 
+
+def _as_list(raw, cap):
+    out = []
+    if isinstance(raw, list):
+        for x in raw:
+            if isinstance(x, str) and x.strip():
+                out.append(x.strip())
+            if len(out) >= cap:
+                break
+    return out
+
+
+def _synth_list(parsed, key, cap):
+    return _as_list((parsed or {}).get(key), cap)
+
+
+def _salvage_count():
+    """`llm` 累计"截断抢救"过几次。看差值就知道刚才那次调用是不是被截断了。"""
+    try:
+        return int(llm.last_finish().get("salvaged") or 0)
+    except Exception:  # noqa: BLE001 - 诊断信息拿不到不影响主流程
+        return 0
+
+
+def _last_truncated():
+    try:
+        return bool(llm.last_finish().get("truncated"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _synth_merge(first, extra, headings):
+    """把"补写"的章节按原章节顺序插回去，避免正文顺序错乱。"""
+    order = {_norm_heading(h): i for i, h in enumerate(headings or [])}
+    merged = list(first) + list(extra)
+    merged.sort(key=lambda s: order.get(_norm_heading(s["heading"]), 99))
+    return merged
+
+
+_SENT_END = "。！？；…」』）)”\"'.!?"
+
+
+def _clean_body(body):
+    """正文收尾处理：被截断的半句话不要留在报告里。
+
+    截断抢救（`llm.salvage_json`）能保住写了一半的字段，但那一节的正文
+    往往停在句子中间（"…该方法的优势在于"）。报告里出现断句比少一节更糟，
+    所以退到最后一个句末；**只有一条句子都没写完时才用原样**（宁可多点字，也不整节丢）。
+    """
+    b = str(body or "").strip()
+    if not b:
+        return ""
+    if b[-1] in _SENT_END or len(b) < 40:
+        return b
+    cut = max(b.rfind(x) for x in "。！？；.!?")
+    if cut >= 20:
+        return b[:cut + 1].strip()
+    return b
+
+
+def _synth_sections(parsed, headings=None):
+    """从模型返回里取出章节：[{heading, body}]。
+
+    兼容三种形状（都真的见过）：
+    * 整篇：{"sections": [{heading, body}, ...]}
+    * 逐节：{"heading": "...", "body": "..."}
+    * 截断抢救后只剩一部分章节（同样走第一种）
+    """
+    out = []
+    if not isinstance(parsed, dict):
+        return out
+    raw = parsed.get("sections")
+    if isinstance(raw, list):
+        for s in raw:
+            if isinstance(s, dict) and str(s.get("heading") or "").strip():
+                out.append({"heading": str(s["heading"]).strip(),
+                            "body": _clean_body(s.get("body"))})
+    elif str(parsed.get("body") or "").strip():
+        head = str(parsed.get("heading") or parsed.get("标题") or "").strip()
+        out.append({"heading": head or (headings[0] if headings else "综述"),
+                    "body": _clean_body(parsed["body"])})
+    # 空正文的章节没有意义，留着只会让报告里出现空标题
+    return [s for s in out if s["body"]]
+
+
+def _norm_heading(text):
+    """章节标题归一化：去掉标点与空白，只留字，便于比对。"""
+    return re.sub(r"[\s，。、：:；;（）()【】\[\]“”\"'·—\-/]+", "", str(text or ""))
+
+
+def _synth_missing(headings, secs):
+    """哪些请求的章节没拿到（模型可能少写、或被截断）。
+
+    标题是模型自己复述的，字面未必一字不差（"损失函数与训练范式" vs
+    "损失函数、优化策略与训练范式横向比较"），所以按"包含/前缀"做宽松比对，
+    宁可判"写到了"，也不要冤枉模型、更不要在报告里凭空报缺节。
+    """
+    if not headings:
+        return []
+    done = [_norm_heading(s["heading"]) for s in secs]
+    missing = []
+    for h in headings:
+        want = _norm_heading(h)
+        if not want:
+            continue
+        hit = any(want in d or d in want or
+                  (len(want) >= 4 and len(d) >= 4 and (want[:4] in d or d[:4] in want))
+                  for d in done if d)
+        if not hit:
+            missing.append(h)
+    return missing
+
+
+def _synth_by_sections(cfg, headings, payload, emit, stop=None):
+    """逐节写：一次只写一节，成功的留下、失败的记下来。
+
+    关键点：**单节失败不连坐**。整篇一次写是"全有或全无"，
+    第 14 次运行里就是因为最后少一个 `}` 让前面写好的 3 节全废了。
+    拆开以后，能写几节就留几节，缺的如实写进 caveat。
+
+    返回 (已写章节, 缺的章节, 是否被用户中断)。
+    """
+    secs, missing = [], []
+    stopped = False
+    heads = headings or ["研究现状与主要方法", "存在的问题与研究空白"]
+    for i, h in enumerate(heads, 1):
+        if stop and stop():
+            missing.extend(heads[i - 1:])
+            emit("收到中断，综述未写完")
+            stopped = True
+            break
+        emit(f"逐节撰写 {i}/{len(heads)}：{h}")
+        part = dict(payload)
+        part["综述的全部章节"] = heads
+        part["当前章节"] = h
+        parsed = _role_json(
+            "writer", f"只写「{h}」这一节。", part,
+            goal=cfg.get("topic") or "", max_tokens=SYNTH_SECTION_TOKENS,
+            temperature=0.2, prompt_override=SYNTH_SECTION_PROMPT,
+            # 单节失败不连坐，但这一节本身值得多试一次（额度会逐次抬高）
+            retries=3)
+        got = _synth_sections(parsed, [h])
+        if got:
+            secs.append({"heading": h, "body": got[0]["body"]})
+        else:
+            missing.append(h)
+    return secs, missing, stopped
+
+
+def _synth_caveat(caveat, meta, n_papers):
+    """把"生成方式"和"缺了哪几节"如实写进局限，而不是假装整篇都写好了。"""
+    notes = []
+    if caveat:
+        notes.append(caveat)
+    if meta.get("missing"):
+        notes.append("以下章节本轮未能生成（模型未返回可用内容）："
+                     + "、".join(meta["missing"][:5]) + "。")
+    if meta.get("mode") in ("by-section", "oneshot+补写"):
+        notes.append("整篇一次生成时模型输出被截断（思考与正文共用输出额度），"
+                     "部分章节改为单独撰写；章节之间的过渡不如整篇连贯。")
+    elif meta.get("truncated"):
+        notes.append("整篇一次生成时模型输出曾被截断，只保留了写完的部分。")
+    if not notes:
+        notes.append(f"本篇综述仅基于检索到的 {n_papers} 篇文献（喂给模型的为前 "
+                     f"{BRIEF_PAPERS} 篇要点），未做全文系统阅读。")
+    return " ".join(n.strip() for n in notes if n and n.strip())
+
+
+def step_synthesize(cfg, papers, emit, sections=None, stop=None,
+                    hypothesis=None, experiment=None, computation=None,
+                    verify=None):
+    """写综述。**三步退让（第 14 次运行就是挂在这一步的）**：
+
+    ① 整篇一次写完 —— 最省调用、上下文最连贯；
+    ② 整篇的 JSON 被截断 → `llm.loads_json` 先"抢救"已经写完的章节；
+    ③ 还是拼不齐 → **逐节写**：一次只写一节，成功的节直接留下，
+       失败的那节记进 caveat，不再让整步归零。
+
+    ## 为什么"重试整篇"没用
+
+    `max_tokens` 是**思考内容 + 正文共用**的。实测该次运行（workflow #14）：
+    flash 先思考了 2698 token，正文写到第 3 节就被砍断
+    （`finish_reason=length`），JSON 少了收尾的 `]` `}`，`json.loads` 必然失败。
+    同一个提示词、同一个 4000 的预算再跑一遍，结果几乎一模一样 ——
+    两轮重试一共 60s，然后整步判失败、报告里没有综述正文。
+    所以修法是：抬额度（SYNTH_TOKENS）+ 截断抢救 + 缩小单次输出（逐节）。
+    """
+    if not papers:
+        raise RuntimeError("没有文献，无法生成综述")
+    if stop and stop():
+        emit("收到中断，未开始撰写综述")
+        return {"sections": [], "consensus": [], "gaps": [], "caveat": "",
+                "interrupted": True}
+    emit(f"阅读 {len(papers)} 篇并撰写综述")
+
+    brief = _synth_brief(papers)
+    payload = _synth_payload(cfg, brief, sections, hypothesis, experiment,
+                            computation, verify)
+    headings = [str(h).strip() for h in (sections or []) if str(h).strip()]
+
+    # ── ① 整篇一次写完（额度已按"思考 + 正文"重新估算）──────────
+    salvaged0 = _salvage_count()
     parsed = _role_json("writer", "请按给定章节撰写综述。", payload,
                         goal=cfg.get("topic") or "",
-                        max_tokens=4000, temperature=0.2,
+                        max_tokens=SYNTH_TOKENS, temperature=0.2,
                         prompt_override=SYNTH_PROMPT)
+    salvaged = _salvage_count() > salvaged0
 
-    if not parsed:
-        raise RuntimeError("综述生成失败（模型未返回可用内容）")
+    secs = _synth_sections(parsed, headings)
+    meta = {"mode": "oneshot" if secs else "", "degraded": False,
+            "missing": [], "truncated": salvaged, "recovered": salvaged}
+    stopped = False
 
-    def slist(key, cap):
-        raw = parsed.get(key)
-        out = []
-        if isinstance(raw, list):
-            for x in raw:
-                if isinstance(x, str) and x.strip():
-                    out.append(x.strip())
-                if len(out) >= cap:
-                    break
-        return out
+    if secs:
+        # 整篇返回了：核对"请求的章节"是否都写到了（截断时通常少最后几节）
+        meta["missing"] = _synth_missing(headings, secs)
+        meta["degraded"] = bool(meta["missing"])
+        if salvaged:
+            emit(f"整篇输出被截断，已保留写完的 {len(secs)} 节")
+        if meta["missing"]:
+            # 只补缺的节，已经写好的不重写（省时间，也不会出现两版正文）
+            emit("补齐缺失的章节：" + "、".join(meta["missing"][:3]))
+            more, still, stopped = _synth_by_sections(cfg, meta["missing"], payload,
+                                                      emit, stop=stop)
+            if more:
+                secs = _synth_merge(secs, more, headings)
+                meta["mode"] = "oneshot+补写"
+            meta["missing"] = still
+            meta["degraded"] = bool(still)
 
-    secs = []
-    if isinstance(parsed.get("sections"), list):
-        for s in parsed["sections"]:
-            if isinstance(s, dict) and str(s.get("heading") or "").strip():
-                secs.append({
-                    "heading": str(s["heading"]).strip(),
-                    "body": str(s.get("body") or "").strip(),
-                })
+    # ── ②/③ 整篇不可用：先看是不是被截断，再决定逐节写 ───────────
+    if not secs and not stopped:
+        meta["truncated"] = salvaged or bool(_last_truncated())
+        emit("整篇输出" + ("被截断" if meta["truncated"] else "不是完整 JSON")
+             + "，改为逐节撰写")
+        secs, missing, stopped = _synth_by_sections(cfg, headings, payload, emit,
+                                                    stop=stop)
+        if secs:
+            meta["mode"] = "by-section"
+            meta["missing"] = missing
+            meta["degraded"] = bool(missing)
+
+    # 逐节写时，共识/空白/局限要单独补（整篇那次没拿到）
+    consensus = _synth_list(parsed, "consensus", 4)
+    gaps = _synth_list(parsed, "gaps", 3)
+    caveat = str((parsed or {}).get("caveat") or "").strip()
+
+    if secs and not consensus:
+        # 假设步骤的共识/空白是带文献编号、有出处的，可以直接作为综述的归纳
+        consensus = _as_list((hypothesis or {}).get("consensus"), 4)
+        gaps = gaps or _as_list((hypothesis or {}).get("gaps"), 3)
+    if secs and not (consensus or gaps):
+        emit("补写共识与空白")
+        extra = _role_json("writer", "请归纳共识与空白。", {
+            "研究目标": cfg.get("topic"),
+            "已写章节": [{"heading": s["heading"], "body": (s["body"] or "")[:400]}
+                         for s in secs],
+            "文献": brief,
+        }, goal=cfg.get("topic") or "", max_tokens=1200, temperature=0.1,
+            prompt_override=SYNTH_SUMMARY_PROMPT)
+        consensus = consensus or _synth_list(extra, "consensus", 4)
+        gaps = gaps or _synth_list(extra, "gaps", 3)
+        caveat = caveat or str((extra or {}).get("caveat") or "").strip()
+
+    caveat = _synth_caveat(caveat, meta, len(papers))
+
+    if stopped:
+        # 用户中途点了中断：按"断点在这一步"处理（与 extract 的语义一致），
+        # 已经写好的章节带回去，续跑时会重写这一步。
+        emit("综述中断，已写的章节已保存")
+        return {"sections": secs, "consensus": consensus, "gaps": gaps,
+                "caveat": caveat, "degraded": meta["degraded"],
+                "mode": meta["mode"], "missing_sections": meta["missing"],
+                "interrupted": True}
 
     if not secs:
-        raise RuntimeError("综述生成失败（没有可用章节）")
+        # 一节都没写出来才算失败（前端与测试都依赖这条语义：不粉饰、如实失败）
+        detail = "；模型输出被截断" if meta["truncated"] else ""
+        raise RuntimeError(f"综述生成失败（模型未返回可用内容）{detail}")
 
-    emit(f"综述完成：{len(secs)} 节")
+    if meta["missing"]:
+        emit(f"综述完成：{len(secs)} 节（缺 {len(meta['missing'])} 节，已如实标注）")
+    else:
+        emit(f"综述完成：{len(secs)} 节")
+
     return {
         "sections": secs,
-        "consensus": slist("consensus", 4),
-        "gaps": slist("gaps", 3),
-        "caveat": str(parsed.get("caveat") or "").strip(),
+        "consensus": consensus,
+        "gaps": gaps,
+        "caveat": caveat,
+        "degraded": meta["degraded"],
+        "mode": meta["mode"],
+        "missing_sections": meta["missing"],
     }
 
 
@@ -2152,6 +2453,14 @@ def build_report(cfg, plan, papers, refs, synth=None, stats=None,
     if synth:
         L.append("## 六、综述正文")
         L.append("")
+        if synth.get("degraded") or (synth.get("missing_sections") or []):
+            L.append("> ⚠️ 本节为**降级生成**：整篇一次撰写时模型输出被截断，"
+                     "部分章节改为单独撰写"
+                     + ("；未生成的章节：" + "、".join(
+                         (synth.get("missing_sections") or [])[:5])
+                        if synth.get("missing_sections") else "")
+                     + "。缺失章节不会由代码补写，请结合第七节的统计结果阅读。")
+            L.append("")
         for s in synth.get("sections") or []:
             L.append(f"### {s['heading']}")
             L.append("")
@@ -2172,6 +2481,15 @@ def build_report(cfg, plan, papers, refs, synth=None, stats=None,
         if synth.get("caveat"):
             L.append(f"> ⚠️ 局限：{synth['caveat']}")
             L.append("")
+    else:
+        # 综述这一步失败时**不留白**：把"为什么没有正文"写清楚，
+        # 免得读者以为是漏排版，也免得有人把第七节的统计当成结论。
+        L.append("## 六、综述正文")
+        L.append("")
+        L.append("> ❌ 本轮未能生成综述正文：「综述与报告撰写」这一步失败"
+                 "（模型未返回可用内容）。第七节的统计与第八节的抽取明细仍然有效，"
+                 "可直接引用；需要综述正文时，请在工作流里点「从断点继续」重跑该步。")
+        L.append("")
 
     # ── 七、统计与可视化 ─────────────────────────────
     if stats:

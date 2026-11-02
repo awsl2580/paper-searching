@@ -326,6 +326,21 @@ python tests/run_all.py
 统计图表 / 信息抽取明细 / 参考文献 / 复现清单。
 **没有文献也要出报告**（说明失败原因），否则用户拿不到任何产物。
 
+**综述这一步为什么要三级退让。** 综述要一次输出 5 个章节 + 共识 + 空白 + 局限，
+而 `max_tokens` 是「思考内容 + 正文」**共用**的：真机上有一次 flash 先思考了 2698
+个 token，正文写到第 3 节就被砍断（`finish_reason=length`），JSON 少了收尾的 `]`、`}`，
+`json.loads` 必然失败 —— 用同样的提示词、同样的额度重试一遍，结果一样，整步判失败，
+报告里就没有综述正文。所以现在的顺序是：
+
+1. **整篇一次写完**（默认 7000 token，`AI4S_SYNTH_TOKENS` 可调）；
+2. 被截断时**抢救已经写完的章节**（`llm.salvage_json` 补括号，只保留模型真写出来的部分，不编造）；
+3. 仍缺章节就**逐节补写**（`AI4S_SYNTH_SECTION_TOKENS`，默认 3000），
+   只补缺的那几节，已写好的不重写；最后把"缺了哪几节 / 是否逐节生成"如实写进报告与 `caveat`。
+
+只有**一节都没写出来**才判 `failed` —— 这一步的失败语义没变，变的是"少一个括号就全废"
+不会再发生了。判断依据是响应里的 `finish_reason`（见 `llm.last_finish()`），
+不再靠猜。
+
 ---
 
 ## 六、DeepSeek 模型接入的细节（不是改个 base_url 就完事）
@@ -345,7 +360,7 @@ python tests/run_all.py
 | 为什么不直接用官方 SDK | 用 `langchain-openai` 指到 DeepSeek base_url：tool calling 与 `astream_events` 都是成熟的，不用自己实现 function call 解析 |
 | 深度思考怎么实现 | **不传 `thinking_mode`**（DeepSeek 没有这个参数）。打开界面开关 = 本轮切到 `deepseek-v4-pro`；pro 会先输出 `reasoning_content`，再输出正文 |
 | 思考内容会混进正文吗 | 不会。分片里 `tool_call_chunks` 非空的是**工具参数**，直接丢弃；`additional_kwargs.reasoning_content` 只用来推「模型正在思考…」状态 |
-| 为什么调 JSON 不带 `response_format` | 为保持两个模型与兼容镜像的行为一致，仍用**宽松解析**：去 markdown 代码块 → 抓最后一个平衡的 `{}` / `[]`，并允许重试一次 |
+| 为什么调 JSON 不带 `response_format` | 为保持两个模型与兼容镜像的行为一致，仍用**宽松解析**：去 markdown 代码块 → 抓最后一个平衡的 `{}` / `[]` → **截断抢救**（补括号，保住已写完的字段），并允许重试（重试会换模型 + 抬高额度 + 追加"只输出闭合 JSON"的提示） |
 | 限流怎么办 | 进程级令牌桶（最小间隔 = 60/RPM），匀速放行；429 用 `Retry-After` 或指数退避重试。一次工作流要 8-12 次调用，不控会被打断 |
 | 为什么只有两个模型还要分四种用途 | 用途是"任务语义"，不是"四个模型"：批量抽取/读图都落到 flash，假设/审稿落到 pro。要换模型只改四个环境变量，代码里没有写死 |
 | 换模型要改代码吗 | 不用，四个环境变量：`DEEPSEEK_MODEL` / `_FAST_` / `_VISION_` / `_REASON_` |

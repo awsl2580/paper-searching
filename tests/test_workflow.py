@@ -129,6 +129,94 @@ try:
 except RuntimeError as e:
     ok("综述失败时抛错", "综述生成失败" in str(e), str(e))
 
+# ── 5b. 综述被截断时的退让（第 14 次真机运行就挂在这里）───────────────
+# 场景：整篇一次写时 JSON 被砍断，只剩前 2 节（模拟 llm.salvage_json 的产物），
+# 后面 3 节应该**单独补写**，而不是因为缺了收尾括号让整步失败。
+SECTIONS5 = ["研究背景", "主流方法", "数据集与评测", "存在问题", "未来方向"]
+calls5 = []
+
+
+def partial_then_sections(prompt, content, **kw):
+    calls5.append((prompt, content))
+    if len(calls5) == 1:                       # 第 1 次：整篇，只有前 2 节
+        return {"sections": [
+            {"heading": "研究背景", "body": "背景正文 [1]。"},
+            {"heading": "主流方法", "body": "方法正文 [2]。"}]}
+    # 之后：逐节补写；沙箱里只让「数据集与评测」这一节成功
+    if '"当前章节": "数据集与评测"' in content:
+        return {"heading": "数据集与评测", "body": "数据集正文 [3]。"}
+    return None
+
+
+wf._call_json = partial_then_sections
+ev5 = []
+syn5 = wf.step_synthesize({"topic": "GNN"}, papers(6), ev5.append, sections=SECTIONS5)
+heads5 = [s["heading"] for s in syn5["sections"]]
+sec_calls5 = [c for p, c in calls5 if p.startswith(wf.SYNTH_SECTION_PROMPT)]
+ok("截断后只补写缺的章节（缺 3 节就只调 3 次）", len(sec_calls5) == 3, len(sec_calls5))
+ok("整篇只尝试一次，不重复烧 token",
+   sum(1 for p, _ in calls5 if p.startswith(wf.SYNTH_PROMPT)) == 1,
+   [p[:12] for p, _ in calls5])
+ok("已写完的章节被保留", "研究背景" in heads5 and "主流方法" in heads5, heads5)
+ok("补写的章节按原顺序插回", heads5 == ["研究背景", "主流方法", "数据集与评测"], heads5)
+ok("缺的章节如实标注", syn5["missing_sections"] == ["存在问题", "未来方向"],
+   syn5["missing_sections"])
+ok("有缺节时标记降级", syn5["degraded"] is True, syn5.get("degraded"))
+ok("局限里写清缺了哪几节", "存在问题" in (syn5["caveat"] or ""), syn5["caveat"])
+ok("进度里能看到逐节补写", any("逐节撰写" in e for e in ev5), ev5)
+
+
+# 整篇完全不可用 -> 全部逐节写；写到哪节算哪节
+def none_then_two(prompt, content, **kw):
+    if '"当前章节": "主流方法"' in content:
+        return {"heading": "主流方法", "body": "方法正文 [2]。"}
+    if '"当前章节": "研究背景"' in content:
+        return {"heading": "研究背景", "body": "背景正文 [1]。"}
+    return None
+
+
+wf._call_json = none_then_two
+syn6 = wf.step_synthesize({"topic": "GNN"}, papers(6), lambda d: None,
+                          sections=["研究背景", "主流方法", "存在问题"])
+ok("整篇失败时逐节写仍能出综述", len(syn6["sections"]) == 2, syn6["sections"])
+ok("逐节写模式被标出来", syn6["mode"] == "by-section", syn6["mode"])
+ok("逐节写缺的节也标注", syn6["missing_sections"] == ["存在问题"], syn6["missing_sections"])
+
+# 逐节返回的是 {"heading","body"} 单节形状，也要能识别
+ok("单节返回形状可识别",
+   wf._synth_sections({"heading": "H", "body": "正文。"}, ["H"]) ==
+   [{"heading": "H", "body": "正文。"}], wf._synth_sections({"heading": "H", "body": "正文。"}))
+_cut_in = ("第一句是完整的，结论明确且可复核。第二句同样完整，与其他研究一致。"
+           "第三句在输出被截断时只写了一半")
+_cut_want = "第一句是完整的，结论明确且可复核。第二句同样完整，与其他研究一致。"
+ok("被截断的半句话不留在正文里",
+   wf._synth_sections({"sections": [{"heading": "A", "body": _cut_in}]})
+   == [{"heading": "A", "body": _cut_want}],
+   wf._synth_sections({"sections": [{"heading": "A", "body": _cut_in}]}))
+ok("标题对不上时会报缺节",
+   wf._synth_missing(["甲章节", "乙章节"], [{"heading": "甲章节", "body": "x。"}]) == ["乙章节"],
+   wf._synth_missing(["甲章节", "乙章节"], [{"heading": "甲章节", "body": "x。"}]))
+
+# 逐节写到一半被用户中断：要如实标 interrupted（续跑会重写这一步），
+# 不能假装"综述写完了、只是缺几节"。
+_sec_calls = {"n": 0}
+
+
+def stop_after_one(prompt, content, **kw):
+    if '"当前章节":' in content:
+        _sec_calls["n"] += 1
+        h = content.split('"当前章节": "', 1)[1].split('"', 1)[0]
+        return {"heading": h, "body": "这一节的正文 [1]。"}
+    return None
+
+
+wf._call_json = stop_after_one
+syn7 = wf.step_synthesize({"topic": "GNN"}, papers(4), lambda d: None,
+                          sections=["第一节", "第二节", "第三节"],
+                          stop=lambda: _sec_calls["n"] >= 1)
+ok("逐节中断时标 interrupted", syn7.get("interrupted") is True, syn7.get("interrupted"))
+ok("中断时保留已经写好的章节", len(syn7["sections"]) >= 1, syn7["sections"])
+
 # ── 6. 参考文献与报告 ────────────────────────────────────────────────────
 f = wf.format_gbt7714({"authors": ["San Zhang", "Si Li"], "title": "A Study",
                        "journal": "J", "year": 2024, "volume": "1", "issue": "2",

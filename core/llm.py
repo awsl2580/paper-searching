@@ -337,6 +337,40 @@ def last_error():
         return dict(_LAST_ERROR)
 
 
+# 最近一次成功响应里"正文有没有被截断"。诊断"为什么解析不出 JSON"时，
+# finish_reason=length 与"模型回了散文"要分开看 —— 前者是额度问题，后者是提示词问题。
+_LAST_FINISH = {"finish_reason": "", "content_chars": 0, "reasoning_chars": 0,
+                "truncated": False, "salvaged": 0, "at": 0.0}
+
+
+def _note_finish(data):
+    """记下响应元信息（不抛异常：诊断信息不该影响主流程）。"""
+    try:
+        ch = (data.get("choices") or [{}])[0]
+        text, reasoning = _pick_message(data)
+        with _ERROR_LOCK:
+            _LAST_FINISH.update({
+                "finish_reason": ch.get("finish_reason") or "",
+                "content_chars": len(text),
+                "reasoning_chars": len(reasoning),
+                "truncated": (ch.get("finish_reason") == "length"),
+                "at": time.time(),
+            })
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def last_finish():
+    """最近一次成功响应的元信息（finish_reason / 是否截断 / 抢救过几次）。"""
+    with _ERROR_LOCK:
+        return dict(_LAST_FINISH)
+
+
+def _note_salvage():
+    with _ERROR_LOCK:
+        _LAST_FINISH["salvaged"] = int(_LAST_FINISH.get("salvaged") or 0) + 1
+
+
 # ═══════════════════════════════════════════════════════════════
 #  宽松 JSON 解析
 # ═══════════════════════════════════════════════════════════════
@@ -376,16 +410,111 @@ def _json_spans(text):
     return spans
 
 
-def loads_json(raw):
+_CLOSERS = {"{": "}", "[": "]"}
+
+
+def _json_candidates(text):
+    """从一段（可能被截断的）JSON 里，找出"能补成合法 JSON"的候选片段。
+
+    ## 为什么需要这个
+
+    综述这种长输出要一次给 5 个章节 + 共识 + 空白 + 局限，而**推理模型的
+    思考内容与正文共用 `max_tokens`**。实测第 14 次运行：`deepseek-V4.1-flash`
+    这次先思考了 2698 个 token，正文写到第 3 节就被砍断（`finish_reason=length`），
+    JSON 少了收尾的 `]` 和 `}`，`json.loads` 必然失败 —— 整步就废了，
+    哪怕前 2 节已经写得很完整。
+
+    这里按"最后一个**完整闭合**的结构"往回退：每遇到一个正常闭合的
+    `}` / `]` 就记一笔当时的未闭合栈，从最靠后的位置开始补括号，
+    哪个能解析就返回哪个。这样被截断的那一节丢掉，前面写完的章节能保住。
+    """
+    start = -1
+    for i, ch in enumerate(text):
+        if ch in "{[":
+            start = i
+            break
+    if start < 0:
+        return []
+
+    body = text[start:]
+    stack, in_str, esc = [], False, False
+    cuts = []                     # [(切点下标, 当时的未闭合栈)]
+    for i, ch in enumerate(body):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if not stack:
+                continue
+            opener = stack.pop()
+            if (opener == "{" and ch != "}") or (opener == "[" and ch != "]"):
+                continue
+            cuts.append((i, list(stack)))
+    if not cuts and not in_str:
+        return []
+
+    out = []
+    for i, remain in reversed(cuts):
+        frag = body[:i + 1]
+        # 截断点后面常留下一个孤零零的逗号（"…},"）—— 补括号前先去掉
+        frag = frag.rstrip().rstrip(",")
+        out.append(frag + "".join(_CLOSERS[b] for b in reversed(remain)))
+    # 截断在字符串中间时，最后一个元素并不可用；但上面已经给出了"上一节收尾"的候选。
+    # 再补一个"把没写完的字符串直接闭合"的候选，覆盖"整个对象只差最后一句话"的情况
+    # （逐节撰写就是这种形状：{"heading": "...", "body": "写到一半）。
+    if in_str:
+        out.append(body.rstrip() + '"' + "".join(_CLOSERS[b] for b in reversed(stack)))
+    return out
+
+
+def salvage_json(raw):
+    """把被 `max_tokens` 截断的 JSON 抢救成对象；救不回来返回 None。
+
+    与 `loads_json` 的区别：`loads_json` 只认**完整**的 JSON 片段，
+    这里允许"少最后一节"，但**绝不编造内容** —— 只保留模型真写出来的部分。
+    """
+    t = (raw or "").strip()
+    if not t:
+        return None
+    if t.startswith("```"):
+        t = t.split("\n", 1)[-1]
+        if t.rstrip().endswith("```"):
+            t = t.rstrip()[:-3]
+        t = t.strip()
+    for frag in _json_candidates(t):
+        try:
+            got = json.loads(frag)
+        except Exception:
+            continue
+        if isinstance(got, (dict, list)):
+            return got
+    return None
+
+
+def loads_json(raw, salvage=True):
     """把模型输出尽量解析成对象。
 
     模型偶尔会包 ```json 代码块、前后加一句"好的，结果如下："，或者（推理模型）
     在正文里先写一大段推理。这里按逐级退让解析：
 
         直接解析 -> 去代码块 -> 抓**最后一个**平衡的 {} / []
+                 -> 截断抢救（salvage）
 
     "取最后一个"是关键：推理模型会在推理里夹 JSON 示例 ——
     最后一个平衡片段才是最终答案。
+
+    `salvage=True` 时，若整段被截断（`finish_reason=length`），会补括号
+    抢救出**已经写完的部分**（见 `salvage_json`）。宁可少一节，
+    也不要因为最后少一个 `}` 让整步判失败。
     """
     t = (raw or "").strip()
     if not t:
@@ -405,6 +534,11 @@ def loads_json(raw):
             return json.loads(frag)
         except Exception:
             continue
+    if salvage:
+        got = salvage_json(t)
+        if got is not None:
+            _note_salvage()
+            return got
     return None
 
 
@@ -542,6 +676,8 @@ def _chat_impl(messages, kind="chat", max_tokens=None, temperature=0.0, model=No
             model = payload["model"]
             ok, data = retry_ok, retry_data
     text, reasoning = _pick_message(data) if ok else ("", "")
+    if ok:
+        _note_finish(data)
 
     # 推理把 max_tokens 吃光，导致 HTTP 200 但正文为空。
     # 这种情况不该判"模型失败"，而是改用快速模型、把额度给正文再试一次。
@@ -551,6 +687,7 @@ def _chat_impl(messages, kind="chat", max_tokens=None, temperature=0.0, model=No
                                     max(int(payload["max_tokens"]), _env_int("DEEPSEEK_TEXT_FLOOR", 1024)))
         ok2, data2 = _post_chat(payload)
         if ok2:
+            _note_finish(data2)
             t2, r2 = _pick_message(data2)
             if t2.strip():
                 _note_thinking_retry(kind, model)
@@ -564,6 +701,7 @@ def _chat_impl(messages, kind="chat", max_tokens=None, temperature=0.0, model=No
         payload["model"] = fallback
         ok, data = _post_chat(payload)
         if ok:
+            _note_finish(data)
             _note_model_fallback(kind, model, fallback)
             return _pick_message(data)
     return "", ""
@@ -626,6 +764,13 @@ def call_text(prompt, user_content, kind="chat", max_tokens=2048,
     )[0]
 
 
+_JSON_NUDGE = (
+    "上一次的输出没能解析成 JSON（常见原因：输出被截断，或者混进了说明文字）。\n"
+    "请**只输出一个完整、闭合的 JSON 对象**：不要写任何解释、不要用 markdown 代码块、"
+    "最后一定要有收尾的 `}`。如果内容太长写不下，请压缩每一段正文的长度，"
+    "**优先保证 JSON 结构完整**，而不是把某一节写得特别长。")
+
+
 def call_json(prompt, user_content, kind="fast", max_tokens=1200,
               temperature=0.0, retries=2, model=None):
     """要一段 JSON 回来。失败返回 None，由调用方决定降级。
@@ -633,19 +778,36 @@ def call_json(prompt, user_content, kind="fast", max_tokens=1200,
     为什么要 retries：模型偶尔会回一段散文而不是 JSON（抽取这种要求格式的
     任务上大约 5% 一次不成）。重试一次的成本远低于整步失败。
 
-    第二次重试会**换策略**：如果当前是 `deepseek-v4-pro`，改用 flash 并抬高额度。
-    推理模型在"大输入 + 严格 JSON"场景里容易被推理内容截断，换 flash 通常能
-    直接拿到干净 JSON。
+    ## 重试时必须同时做三件事（只做一件都不够）
+
+    1. **换模型**：`deepseek-v4-pro` 在"大输入 + 严格 JSON"场景里容易被推理
+       内容截断，换 flash 通常能直接拿到干净 JSON；
+    2. **抬高额度**：`max_tokens` 是**思考 + 正文共用**的。第 14 次运行实测：
+       flash 这次也先思考了 2698 token，正文写到第 3 节就被砍断
+       （`finish_reason=length`），JSON 少了收尾括号；原来的重试只把额度抬到
+       2600 的下限，对本步的 4000 等于没变 —— 所以这里按倍率往上抬；
+    3. **改提示词**：同一段提示词重跑大概率还是同一段散文，所以追加一句
+       "只输出闭合 JSON、写不下就压缩正文"。
+
+    解析走 `loads_json`，它自带"截断抢救"：整段被砍掉时，已经写完的部分
+    仍然能被返回（少一节，但不用整步失败）。
     """
+    messages = [{"role": "system", "content": prompt},
+                {"role": "user", "content": user_content}]
+    budget = int(max_tokens or 1200)
     for attempt in range(max(1, retries)):
-        # 第一次按配置来；之后换策略：强制不推理 + 抬高额度。
         force_plain = attempt > 0
+        if force_plain:
+            # 第二次起：额度至少 ×1.6、且至少比第一次多 1200，封顶 MAX_TOKENS_CAP
+            budget = min(MAX_TOKENS_CAP,
+                         max(int(budget * 1.6), budget + 1200,
+                             _env_int("DEEPSEEK_JSON_RETRY_TOKENS", 2600)))
+            messages = [{"role": "system", "content": prompt},
+                        {"role": "user", "content": user_content},
+                        {"role": "user", "content": _JSON_NUDGE}]
         text, _reasoning = _chat_impl(
-            [{"role": "system", "content": prompt},
-             {"role": "user", "content": user_content}],
-            kind=kind,
-            max_tokens=max(max_tokens, _env_int("DEEPSEEK_JSON_RETRY_TOKENS", 2600))
-            if force_plain else max_tokens,
+            messages,
+            kind=kind, max_tokens=budget,
             temperature=temperature, model=model, force_no_thinking=force_plain,
         )
         if not text:
@@ -835,6 +997,7 @@ __all__ = [
     "is_selectable", "available", "api_key", "api_model_for", "backend",
     "call_json", "call_text",
     "chat", "chat_model", "chat_model_name", "check_models", "last_error",
-    "http_stats", "loads_json", "model_fallbacks", "model_for", "model_info", "probe",
+    "http_stats", "loads_json", "salvage_json", "last_finish",
+    "model_fallbacks", "model_for", "model_info", "probe",
     "require_llm", "reset_rate_limit_waits", "thinking_mode_for",
 ]

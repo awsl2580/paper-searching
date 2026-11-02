@@ -178,6 +178,28 @@ ok("嵌套与字符串里的括号不破坏切分",
 ok("空串解析为 None", llm.loads_json("") is None)
 ok("纯散文解析为 None", llm.loads_json("这是一段没有任何 JSON 的话") is None)
 
+# ── 6b. 输出被 max_tokens 截断时的抢救（workflow #14 的真实失败样本）──────
+# 真实原因：max_tokens 是"思考 + 正文"共用的，flash 先思考了 2698 token，
+# 正文写到第 3 节就被砍断（finish_reason=length），JSON 少了收尾括号。
+TRUNC = ('{"sections": [{"heading": "研究背景", "body": "背景正文 [1]。"}, '
+         '{"heading": "主流方法", "body": "方法正文 [2]。"}, '
+         '{"heading": "损失函数", "body": "这一节写到一半就')
+ok("旧行为：完整解析必然失败", llm.loads_json(TRUNC, salvage=False) is None,
+   llm.loads_json(TRUNC, salvage=False))
+got_trunc = llm.loads_json(TRUNC)
+ok("截断抢救：保留已写完的章节",
+   isinstance(got_trunc, dict) and len(got_trunc.get("sections") or []) == 2,
+   got_trunc)
+ok("截断抢救：不丢已写完的字段",
+   (got_trunc or {}).get("sections", [{}])[0].get("heading") == "研究背景", got_trunc)
+ok("截断在字符串中间也能闭合",
+   isinstance(llm.salvage_json('{"heading": "A", "body": "写了一半'), dict),
+   llm.salvage_json('{"heading": "A", "body": "写了一半'))
+ok("没有完整结构的碎片不会被硬凑成对象",
+   llm.loads_json('前缀 {"a": [1, 2') is None, llm.loads_json('前缀 {"a": [1, 2'))
+ok("截断抢救会计数（/api/models 与工作流据此判断截断）",
+   llm.last_finish().get("salvaged", 0) >= 1, llm.last_finish())
+
 # ── 7. backend / require_llm ──────────────────────────────────────
 llm.API_KEY = ""
 ok("没有 key 时 backend 为 None", llm.backend() is None, llm.backend())
