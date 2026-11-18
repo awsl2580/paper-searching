@@ -120,47 +120,121 @@ open(PROV, "w", encoding="utf-8").write("{ not json")
 ok("坏文件按空处理", provider_store.list_public()["providers"] == [])
 ok("坏文件被改名留证", os.path.exists(PROV + ".broken"))
 
-# ── 2. 接口层 ────────────────────────────────────────────────
-os.path.exists(PROV + ".broken") and os.remove(PROV + ".broken")
-provider_store.upsert({"name": "DeepSeek", "base_url": "https://api.deepseek.com/v1",
-                       "api_key": "sk-abcdefghijklmnop", "model": "deepseek-chat"})
+# ── 2. 账号隔离（本次需求的核心）──────────────────────────────
+# 换账号后不能用到上一个账号的 Key，也不能看到它。
+provider_store.set_current_user("1")
+provider_store.upsert({"name": "A家", "base_url": "https://a.example.com/v1",
+                       "api_key": "sk-aaaaaaaaaaaaaaaa"})
+ok("A 账号有自己的提供商", len(provider_store.list_public()["providers"]) == 1)
+ok("A 账号拿到自己的 Key",
+   provider_store.resolve()["api_key"] == "sk-aaaaaaaaaaaaaaaa",
+   provider_store.resolve()["api_key"])
+
+provider_store.set_current_user("2")
+ok("B 账号看不到 A 的提供商（列表为空）",
+   provider_store.list_public()["providers"] == [],
+   provider_store.list_public()["providers"])
+ok("B 账号用不到 A 的 Key（退回 .env）",
+   provider_store.resolve()["api_key"] == os.environ["DEEPSEEK_API_KEY"],
+   provider_store.resolve()["api_key"])
+
+provider_store.set_current_user("1")
+ok("切回 A 账号，Key 还在",
+   provider_store.resolve()["api_key"] == "sk-aaaaaaaaaaaaaaaa")
+
+provider_store.set_current_user(None)
+ok("访客看不到账号的 Key（只退回 .env）",
+   provider_store.resolve()["api_key"] == os.environ["DEEPSEEK_API_KEY"],
+   provider_store.resolve()["api_key"])
+ok("访客列表里没有账号的提供商",
+   provider_store.list_public()["providers"] == [])
+
+# 老版本（v1：整机一份）自动搬进访客桶，不丢配置。
+# 用**独立的临时文件**做这件事：否则会把上面 user 1 的配置一起覆盖掉。
+import json as _json  # noqa: E402
+MIG = temp_file_path("_tmp_providers_v1.json")
+provider_store.set_path(MIG)
+io.open(MIG, "w", encoding="utf-8", newline="\n").write(_json.dumps({
+    "version": 1, "active_id": "legacy",
+    "providers": [{"id": "legacy", "name": "旧配置", "base_url": "https://old.example.com/v1",
+                   "api_key": "sk-legacy-1234567890", "model": "deepseek-chat"}],
+}, ensure_ascii=False))
+provider_store.set_current_user(None)
+ok("v1 配置迁移到访客桶，没丢",
+   provider_store.resolve()["api_key"] == "sk-legacy-1234567890",
+   provider_store.resolve()["api_key"])
+provider_store.set_current_user("7")
+ok("迁移后的旧配置不会串给登录账号",
+   provider_store.resolve()["api_key"] != "sk-legacy-1234567890",
+   provider_store.resolve()["api_key"])
+provider_store.set_current_user(None)
+provider_store.set_path(PROV)      # 切回主测试文件
+
+# ── 3. 接口层（写操作要求登录）───────────────────────────────
+os.remove(PROV)
+
+
+def login_as(client, uid):
+    """给 test client 塞一个登录态（Flask 的 session 是签名的，测试里可直接写）。"""
+    with client.session_transaction() as sess:
+        sess["user_id"] = uid
+
 
 c = appmod.app.test_client()
+
+# 未登录：能看（空列表 + 提示），不能改
 r = c.get("/api/providers")
 data = r.get_json() or {}
-ok("GET /api/providers 成功", r.status_code == 200 and data.get("success"), r.status_code)
-ok("接口返回提供商列表", len(data.get("providers") or []) == 1)
+ok("未登录也能打开（返回空列表）", r.status_code == 200 and data.get("success"), r.status_code)
+ok("未登录时标记 login_required", data.get("login_required") is True, data.get("login_required"))
+ok("未登录时 editable=false", data.get("editable") is False, data.get("editable"))
+r0 = c.post("/api/providers", json={"name": "x", "api_key": "sk-xxxxxxxxxxxx"})
+ok("未登录不能新增（403）", r0.status_code == 403, r0.status_code)
+ok("提示里说明 Key 绑定账号",
+   "绑定账号" in ((r0.get_json() or {}).get("error") or ""),
+   (r0.get_json() or {}).get("error"))
+
+# 账号 1
+c1 = appmod.app.test_client()
+login_as(c1, 1)
+r1 = c1.post("/api/providers", json={"name": "DeepSeek",
+                                     "base_url": "https://api.deepseek.com/v1",
+                                     "api_key": "sk-abcdefghijklmnop",
+                                     "model": "deepseek-chat"})
+d1 = r1.get_json() or {}
+ok("登录后可以新增", r1.status_code == 200 and d1.get("success"), d1.get("error"))
 ok("接口不回传完整 Key",
-   "sk-abcdefghijklmnop" not in json.dumps(data, ensure_ascii=False))
-ok("本机请求允许修改", data.get("editable") is True, data.get("editable"))
+   "sk-abcdefghijklmnop" not in _json.dumps(d1, ensure_ascii=False))
+ok("新增后列表有一家", len((d1.get("list") or {}).get("providers") or []) == 1)
 
-r2 = c.post("/api/providers", json={"name": "本地 vLLM",
-                                    "base_url": "http://127.0.0.1:8001/v1",
-                                    "api_key": "sk-local-1234567890",
-                                    "model": "qwen"})
-d2 = r2.get_json() or {}
-ok("POST 新增成功", r2.status_code == 200 and d2.get("success"), d2.get("error"))
-ids = [p["id"] for p in (d2.get("list") or {}).get("providers", [])]
-ok("新增后列表里有两家", len(ids) == 2, ids)
-
-r3 = c.post("/api/providers", json={"name": ""})
-ok("空名称返回 400", r3.status_code == 400, r3.status_code)
-
-r4 = c.post(f"/api/providers/{ids[1]}/activate")
-ok("切换接口成功", r4.status_code == 200 and (r4.get_json() or {}).get("success"))
-ok("切换后 llm 用的是新家", llm.api_key() == "sk-local-1234567890", llm.api_key())
-
-r5 = c.delete(f"/api/providers/{ids[1]}")
-ok("删除接口成功", r5.status_code == 200 and (r5.get_json() or {}).get("success"))
-ok("删除不存在的返回 404", c.delete("/api/providers/nope").status_code == 404)
-
-# 公网（非回环）且未登录：只能看，不能改
+# 账号 2：看不到账号 1 的配置
 c2 = appmod.app.test_client()
-r6 = c2.post("/api/providers", json={"name": "hack", "api_key": "sk-xxxxxxxxxxxx"},
-             environ_base={"REMOTE_ADDR": "203.0.113.9"})
-ok("公网未登录不能新增（403）", r6.status_code == 403, r6.status_code)
-r7 = c2.delete("/api/providers/deepseek", environ_base={"REMOTE_ADDR": "203.0.113.9"})
-ok("公网未登录不能删除（403）", r7.status_code == 403, r7.status_code)
+login_as(c2, 2)
+d2 = c2.get("/api/providers").get_json() or {}
+ok("账号 2 看不到账号 1 的提供商",
+   d2.get("providers") == [], d2.get("providers"))
+ok("账号 2 的 editable 仍是 true（自己的可以改）", d2.get("editable") is True)
+
+# 账号 2 加自己的，两家互不干扰
+r2 = c2.post("/api/providers", json={"name": "中转", "base_url": "https://relay.example.com/v1",
+                                     "api_key": "sk-2222222222222222"})
+ok("账号 2 加自己的提供商", r2.status_code == 200, r2.status_code)
+d1b = c1.get("/api/providers").get_json() or {}
+ok("账号 1 的列表没被污染（仍 1 家）",
+   len(d1b.get("providers") or []) == 1, d1b.get("providers"))
+
+# 切换属主校验：账号 2 不能切/删账号 1 的 id
+pid1 = (d1b.get("providers") or [{}])[0].get("id")
+r3 = c2.post(f"/api/providers/{pid1}/activate")
+ok("账号 2 不能切换账号 1 的提供商（404）", r3.status_code == 404, r3.status_code)
+r4 = c2.delete(f"/api/providers/{pid1}")
+ok("账号 2 不能删除账号 1 的提供商（404）", r4.status_code == 404, r4.status_code)
+
+# 账号 1 自己可以
+r5 = c1.post(f"/api/providers/{pid1}/activate")
+ok("账号 1 可以切换自己的", r5.status_code == 200, r5.status_code)
+r6 = c1.delete("/api/providers/nope")
+ok("删除不存在的返回 404", r6.status_code == 404, r6.status_code)
 
 # ── 3. 版本库边界 ────────────────────────────────────────────
 import subprocess  # noqa: E402

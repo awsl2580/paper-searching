@@ -1565,15 +1565,32 @@ except Exception:            # pragma: no cover - 极端情况下也不该挡住
     provider_store = None
 
 
+@app.before_request
+def _bind_provider_user():
+    """把当前登录账号告诉 provider_store —— Key 是**按账号隔离**的。
+
+    必须在读模型的视图之前跑。用 thread-local 而不是全局变量：
+    llm.api_key()/base_url() 在请求线程里被同步调用，全局变量在并发下会串账号
+    （A 的请求读到 B 的 Key，正是这次要修的问题）。
+    """
+    if provider_store is not None:
+        provider_store.set_current_user(session.get("user_id"))
+    return None
+
+
 @app.get("/api/providers")
 def list_providers():
     """提供商列表（Key 只回显头尾）+ 当前生效的那一家。"""
     if provider_store is None:
         return jsonify({"success": False, "error": "提供商模块不可用"}), 500
     data = provider_store.list_public()
+    logged_in = 'user_id' in session
     data.update({
         "success": True,
-        "editable": _api_key_editable(),
+        # Key 绑定账号：未登录只能看（通常是空的），不能改
+        "editable": logged_in,
+        "logged_in": logged_in,
+        "login_required": not logged_in,
         "env_fallback": data.get("env_fallback", False),
     })
     return jsonify(data)
@@ -1584,8 +1601,9 @@ def save_provider():
     """新增或修改一家提供商。api_key 留空 = 沿用原来的（编辑时不必重填）。"""
     if provider_store is None:
         return jsonify({"success": False, "error": "提供商模块不可用"}), 500
-    if not _api_key_editable():
-        return jsonify({"success": False, "error": "请先登录后再修改模型提供商"}), 403
+    if 'user_id' not in session:
+        return jsonify({"success": False,
+                        "error": "API Key 绑定账号，请先登录后再修改"}), 403
     data = request.get_json(force=True, silent=True) or {}
     try:
         item = provider_store.upsert(data)
@@ -1606,8 +1624,9 @@ def save_provider():
 def remove_provider(pid):
     if provider_store is None:
         return jsonify({"success": False, "error": "提供商模块不可用"}), 500
-    if not _api_key_editable():
-        return jsonify({"success": False, "error": "请先登录后再修改模型提供商"}), 403
+    if 'user_id' not in session:
+        return jsonify({"success": False,
+                        "error": "API Key 绑定账号，请先登录后再修改"}), 403
     ok = provider_store.delete(pid)
     if not ok:
         return jsonify({"success": False, "error": "没有这一家提供商"}), 404
@@ -1618,8 +1637,9 @@ def remove_provider(pid):
 def activate_provider(pid):
     if provider_store is None:
         return jsonify({"success": False, "error": "提供商模块不可用"}), 500
-    if not _api_key_editable():
-        return jsonify({"success": False, "error": "请先登录后再切换模型提供商"}), 403
+    if 'user_id' not in session:
+        return jsonify({"success": False,
+                        "error": "API Key 绑定账号，请先登录后再切换"}), 403
     if not provider_store.set_active(pid):
         return jsonify({"success": False, "error": "没有这一家提供商"}), 404
     return jsonify({"success": True, "message": "已切换", "list": provider_store.list_public()})

@@ -1,31 +1,34 @@
-"""模型提供商存储（对应界面「设置 → 模型」里那一列）。
+"""模型提供商存储 —— **按账号隔离**（每家一条，各自一把 API Key）。
 
-## 为什么要有这一层
+## 为什么要按账号存
 
-原来站点只支持一把 DeepSeek Key（写死在 `.env` 的 `DEEPSEEK_API_KEY`）。
-但 DeepSeek 走的是 OpenAI 兼容协议，同一套代码可以指向任何兼容服务
-（DeepSeek 官方、各家中转、本地 vLLM/Ollama……）。把"提供商"做成一条条记录，
-就能像常见客户端那样：**一家一个 Key，随时加、改、切换**，而不用改代码或重启。
+原来 providers.json 是"整台机器一份"：同一个浏览器换个账号登录，
+新账号照样能用上一个账号填的 Key（甚至能直接看到它的头尾）。
+现在 Key 跟着账号走 ——
 
-## 存储
-
-`providers.json`（与 accounts.json 同目录，**不进版本库** —— 里面是真 Key）：
+    accounts.json  存账号（用户名 / bcrypt 哈希）
+    providers.json 存"每个账号自己的模型提供商与 Key"
 
     {
-      "version": 1,
-      "active_id": "deepseek",
-      "providers": [
-        {"id": "deepseek", "name": "DeepSeek",
-         "base_url": "https://api.deepseek.com/v1",
-         "api_key": "sk-...", "model": "deepseek-chat",
-         "created_at": "2026-11-18 15:30:00"}
-      ]
+      "version": 2,
+      "users": {
+        "1":         {"active_id": "deepseek", "providers": [...]},
+        "2":         {"active_id": null,       "providers": []},
+        "__guest__": {"active_id": null,       "providers": []}
+      }
     }
 
-## 兼容旧配置
+* 已登录：只用**本账号**的桶；桶里没 Key 就退回 `.env`（全站共用的站点 Key），
+  **不会**去读别的账号、也不会读访客桶 —— 跨账号串用就是从这两条漏出来的。
+* 未登录（访客）：用 `__guest__` 桶。换账号登录后自然看不到它。
+* 老版本（version 1，整机一份）首次读取时会整体搬进 `__guest__`，
+  不会丢配置；登录用户自己再加一份即可。
 
-文件不存在、或没有任何一条配置了 Key 时，`resolve()` 会退回 `.env` 的
-`DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` —— 之前填过 Key 的人不需要做任何迁移。
+## 当前账号怎么传进来
+
+`core/llm.py` 在请求线程里被调用，所以用 **thread-local** 记当前账号：
+`web/app.py` 的 before_request 每请求 `set_current_user(...)` 一次。
+CLI（Agent.py）不设置，等价于访客。
 """
 
 from __future__ import annotations
@@ -40,18 +43,34 @@ _HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DEFAULT_PATH = os.path.join(_HERE, "providers.json")
 _LOCK = threading.RLock()
 _OVERRIDE = None
+_TLS = threading.local()
 
-VERSION = 1
+VERSION = 2
+GUEST = "__guest__"
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_MODEL = "deepseek-chat"
 
 
-def path() -> str:
-    """providers.json 的位置。
+# ── 当前账号（请求线程级）────────────────────────────────────
+def set_current_user(user_id):
+    """由 web 层的 before_request 每请求调用；None 表示未登录（访客）。"""
+    _TLS.uid = None if user_id in (None, "") else str(user_id)
+    return _TLS.uid
 
-    优先级：set_path() > 环境变量 PROVIDERS_FILE > 测试临时目录 > 项目根目录。
-    测试会把 PROVIDERS_FILE 指到临时目录，别污染真实配置。
-    """
+
+def current_user():
+    return getattr(_TLS, "uid", None)
+
+
+def bucket_key(user_id="__auto__"):
+    if user_id == "__auto__":
+        user_id = current_user()
+    return GUEST if user_id in (None, "") else str(user_id)
+
+
+# ── 文件位置 ────────────────────────────────────────────────
+def path() -> str:
+    """优先级：set_path() > PROVIDERS_FILE > 测试临时目录 > 项目根目录。"""
     if _OVERRIDE:
         return _OVERRIDE
     env = (os.environ.get("PROVIDERS_FILE") or "").strip()
@@ -79,24 +98,40 @@ def _now():
 
 
 def _empty():
-    return {"version": VERSION, "active_id": None, "providers": []}
+    return {"version": VERSION, "users": {}}
+
+
+def _migrate(data: dict) -> dict:
+    """把 version 1（整机一份）搬进访客桶。"""
+    if data.get("version") == VERSION and isinstance(data.get("users"), dict):
+        return data
+    old_providers = data.get("providers") if isinstance(data.get("providers"), list) else []
+    return {
+        "version": VERSION,
+        "users": {
+            GUEST: {
+                "active_id": data.get("active_id"),
+                "providers": [p for p in old_providers if isinstance(p, dict)],
+            }
+        } if old_providers else {},
+    }
 
 
 def load() -> dict:
-    """读文件；不存在/坏了返回空结构（坏文件改名留证，不抛异常）。"""
     p = path()
     if not os.path.isfile(p):
         return _empty()
     try:
         with open(p, encoding="utf-8") as f:
             data = json.load(f)
-        if not isinstance(data, dict) or not isinstance(data.get("providers"), list):
+        if not isinstance(data, dict):
             raise ValueError("结构不对")
-        data.setdefault("version", VERSION)
-        data.setdefault("active_id", None)
+        data = _migrate(data)
         # 丢掉结构不完整的条目，避免一条坏数据让整个列表渲染失败
-        data["providers"] = [x for x in data["providers"]
-                             if isinstance(x, dict) and x.get("id") and x.get("name")]
+        for bucket in data["users"].values():
+            if isinstance(bucket, dict) and isinstance(bucket.get("providers"), list):
+                bucket["providers"] = [x for x in bucket["providers"]
+                                       if isinstance(x, dict) and x.get("id") and x.get("name")]
         return data
     except Exception:
         try:
@@ -107,7 +142,6 @@ def load() -> dict:
 
 
 def save(data: dict) -> str:
-    """原子写：先写临时文件再 replace，避免半截 JSON 把配置写坏。"""
     p = path()
     d = os.path.dirname(p)
     if d:
@@ -120,8 +154,19 @@ def save(data: dict) -> str:
     return p
 
 
+def _bucket(data: dict, user_id="__auto__") -> dict:
+    key = bucket_key(user_id)
+    users = data.setdefault("users", {})
+    bucket = users.get(key)
+    if not isinstance(bucket, dict):
+        bucket = {"active_id": None, "providers": []}
+        users[key] = bucket
+    bucket.setdefault("active_id", None)
+    bucket.setdefault("providers", [])
+    return bucket
+
+
 def mask_key(key: str) -> str:
-    """只回显头尾：够认出是哪一把，又不把整把 Key 送到前端。"""
     key = (key or "").strip()
     if not key:
         return ""
@@ -141,7 +186,6 @@ def _slug(name: str, existing: set[str]) -> str:
 
 
 def _normalize_base(raw: str) -> str:
-    """收敛成 `.../v1`（去掉尾斜杠）。和 core/llm.py 的规则保持一致。"""
     base = (raw or "").strip().rstrip("/")
     if not base:
         return DEFAULT_BASE_URL
@@ -152,12 +196,14 @@ def _normalize_base(raw: str) -> str:
     return base
 
 
-def list_public() -> dict:
-    """给界面用的列表：Key 只留头尾，附带 active 标记。"""
+# ── 读 ──────────────────────────────────────────────────────
+def list_public(user_id="__auto__") -> dict:
+    """当前账号的提供商列表（Key 只留头尾）+ active 标记。"""
     data = load()
-    active = data.get("active_id")
+    bucket = _bucket(data, user_id)
+    active = bucket.get("active_id")
     items = []
-    for p in data["providers"]:
+    for p in bucket["providers"]:
         key = (p.get("api_key") or "").strip()
         items.append({
             "id": p["id"],
@@ -168,14 +214,20 @@ def list_public() -> dict:
             "key_hint": mask_key(key),
             "active": p["id"] == active,
         })
-    return {"active_id": active, "providers": items,
-            "env_fallback": not any(i["key_set"] for i in items)}
+    return {
+        "active_id": active,
+        "providers": items,
+        "env_fallback": not any(i["key_set"] for i in items),
+        "bucket": bucket_key(user_id),
+        "logged_in": bucket_key(user_id) != GUEST,
+    }
 
 
-def upsert(payload: dict) -> dict:
-    """新增或修改一条提供商。
+# ── 写 ──────────────────────────────────────────────────────
+def upsert(payload: dict, user_id="__auto__") -> dict:
+    """新增或修改**当前账号**的一条提供商。
 
-    `api_key` 为空表示"沿用原来的"（编辑时不重新填 Key 也能改名字/地址）。
+    `api_key` 为空表示"沿用原来的"（编辑时不重填 Key 也能改名字/地址）。
     """
     name = (payload.get("name") or "").strip()
     if not name:
@@ -184,19 +236,20 @@ def upsert(payload: dict) -> dict:
         raise ValueError("名称太长（最多 40 字）")
 
     data = load()
+    bucket = _bucket(data, user_id)
     pid = (payload.get("id") or "").strip()
-    existing_ids = {p["id"] for p in data["providers"]}
+    existing_ids = {p["id"] for p in bucket["providers"]}
     if not pid:
         pid = _slug(name, existing_ids)
 
-    target = next((p for p in data["providers"] if p["id"] == pid), None)
+    target = next((p for p in bucket["providers"] if p["id"] == pid), None)
     key = (payload.get("api_key") or "").strip().strip('"').strip("'").strip()
     if key and (len(key) < 8 or any(c.isspace() for c in key)):
         raise ValueError("API Key 看起来不对（不能有空格，长度至少 8）")
 
     if target is None:
         target = {"id": pid, "created_at": _now(), "api_key": ""}
-        data["providers"].append(target)
+        bucket["providers"].append(target)
     if key:
         target["api_key"] = key
     target["name"] = name
@@ -206,46 +259,50 @@ def upsert(payload: dict) -> dict:
         target["model"] = model
     target.setdefault("model", DEFAULT_MODEL)
 
-    if not data.get("active_id") or not any(
-            p["id"] == data["active_id"] for p in data["providers"]):
-        data["active_id"] = pid
+    if not bucket.get("active_id") or not any(
+            p["id"] == bucket["active_id"] for p in bucket["providers"]):
+        bucket["active_id"] = pid
 
     save(data)
     return target
 
 
-def delete(pid: str) -> bool:
+def delete(pid: str, user_id="__auto__") -> bool:
     data = load()
-    before = len(data["providers"])
-    data["providers"] = [p for p in data["providers"] if p["id"] != pid]
-    if len(data["providers"]) == before:
+    bucket = _bucket(data, user_id)
+    before = len(bucket["providers"])
+    bucket["providers"] = [p for p in bucket["providers"] if p["id"] != pid]
+    if len(bucket["providers"]) == before:
         return False
-    if data.get("active_id") == pid:
-        keyed = [p["id"] for p in data["providers"] if (p.get("api_key") or "").strip()]
-        data["active_id"] = (keyed or [p["id"] for p in data["providers"]] or [None])[0]
+    if bucket.get("active_id") == pid:
+        keyed = [p["id"] for p in bucket["providers"] if (p.get("api_key") or "").strip()]
+        bucket["active_id"] = (keyed or [p["id"] for p in bucket["providers"]] or [None])[0]
     save(data)
     return True
 
 
-def set_active(pid: str) -> bool:
+def set_active(pid: str, user_id="__auto__") -> bool:
     data = load()
-    if not any(p["id"] == pid for p in data["providers"]):
+    bucket = _bucket(data, user_id)
+    if not any(p["id"] == pid for p in bucket["providers"]):
         return False
-    data["active_id"] = pid
+    bucket["active_id"] = pid
     save(data)
     return True
 
 
-def resolve() -> dict:
-    """当前生效的提供商：{base_url, api_key, model, id, name, source}。
+def resolve(user_id="__auto__") -> dict:
+    """当前账号生效的提供商。
 
-    没有任何可用配置时返回空 Key，由调用方决定怎么提示。
+    已登录只看自己的桶；访客只看访客桶；都没有 Key 时退回 `.env`。
+    **绝不跨桶回退** —— 那正是"换账号还能用上一个账号 Key"的原因。
     """
     data = load()
-    active = next((p for p in data["providers"]
-                   if p["id"] == data.get("active_id")), None)
+    bucket = _bucket(data, user_id)
+    active = next((p for p in bucket["providers"]
+                   if p["id"] == bucket.get("active_id")), None)
     if active is None:
-        active = next((p for p in data["providers"]
+        active = next((p for p in bucket["providers"]
                        if (p.get("api_key") or "").strip()), None)
     if active is not None:
         key = (active.get("api_key") or "").strip()
@@ -259,7 +316,6 @@ def resolve() -> dict:
                 "source": "store",
             }
 
-    # 回退：沿用 .env 里的旧配置（老用户不需要迁移）
     env_key = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
     env_base = (os.getenv("DEEPSEEK_BASE_URL") or "").strip() or DEFAULT_BASE_URL
     return {
@@ -272,11 +328,11 @@ def resolve() -> dict:
     }
 
 
-def summary() -> dict:
-    """启动横幅/接口用：当前生效的是谁、配了几家。"""
-    r = resolve()
+def summary(user_id="__auto__") -> dict:
+    r = resolve(user_id)
     data = load()
-    configured = sum(1 for p in data["providers"] if (p.get("api_key") or "").strip())
+    bucket = _bucket(data, user_id)
+    configured = sum(1 for p in bucket["providers"] if (p.get("api_key") or "").strip())
     return {
         "source": r["source"],
         "name": r["name"],
@@ -284,5 +340,6 @@ def summary() -> dict:
         "key_hint": mask_key(r["api_key"]),
         "base_url": r["base_url"],
         "configured_count": configured,
-        "total_count": len(data["providers"]),
+        "total_count": len(bucket["providers"]),
+        "bucket": bucket_key(user_id),
     }

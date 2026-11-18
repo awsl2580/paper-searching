@@ -1453,6 +1453,15 @@
             font-family: inherit;
         }
         .pv-btn:hover { border-color: #4f7df3; color: #2b4acb; }
+        .pv-login-hint {
+            display: flex; align-items: center; justify-content: space-between; gap: 10px;
+            border: 1px dashed #cfd9e8; border-radius: 12px; background: #fbfcff;
+            padding: 10px 12px; font-size: 12px; color: #5a6b85; line-height: 1.5;
+        }
+        .pv-login-hint b { color: #2b3a55; font-weight: 600; }
+        .pv-login-hint .pv-btn { flex: 0 0 auto; }
+        html[data-theme="dark"] .pv-login-hint { background: #14202e; border-color: #2b3d52; color: #a9b8cc; }
+        html[data-theme="dark"] .pv-login-hint b { color: #dbe3f0; }
         .pv-empty { font-size: 12.5px; color: #8892a4; text-align: center; padding: 14px 0; }
         .provider-add {
             width: 100%; margin: 2px 0 4px; padding: 11px;
@@ -4883,7 +4892,7 @@
            一家一条记录：名称 + Base URL + 自己的 Key。
            当前生效的那家带绿点与「当前使用」；可切换、编辑、删除。
            数据落在 providers.json（不进版本库），接口见 /api/providers。 */
-        let providerState = { items: [], activeId: null, editable: true, envFallback: false };
+        let providerState = { items: [], activeId: null, editable: true, envFallback: false, loggedIn: true };
         let editingProviderId = null;
 
         function providerStatusEl(msg, ok) {
@@ -4897,14 +4906,21 @@
             const host = document.getElementById('providerList');
             if (!host) return;
             const items = providerState.items || [];
-            const rows = items.map(function (p) {
+            const rows = [];
+            if (!providerState.loggedIn) {
+                rows.push('<div class="pv-login-hint">' +
+                    '<span>API Key 绑定账号：登录后填写，<b>换账号不会沿用上一个账号的 Key</b>。</span>' +
+                    '<button type="button" class="pv-btn" onclick="providerGoLogin()">去登录</button>' +
+                    '</div>');
+            }
+            items.forEach(function (p) {
                 const dot = '<span class="pv-dot' + (p.key_set ? ' on' : '') + '" aria-hidden="true"></span>';
                 // 状态放前面：这一行是 nowrap + 省略号，放后面会被先截掉
                 const state = p.key_set
                     ? '已配置 ' + escapeHtml(p.key_hint || '')
                     : '未填写 Key';
                 const activeTag = p.active ? '<span class="pv-active">当前使用</span>' : '';
-                return '<div class="pv-row' + (p.active ? ' is-active' : '') + '">' +
+                rows.push('<div class="pv-row' + (p.active ? ' is-active' : '') + '">' +
                     '<div class="pv-main">' +
                         '<div class="pv-name">' + escapeHtml(p.name) + dot + activeTag + '</div>' +
                         '<div class="pv-sub">' + state + ' · ' + escapeHtml(p.base_url || '') + '</div>' +
@@ -4916,15 +4932,15 @@
                         '<button type="button" class="pv-btn" onclick="editProvider(\'' +
                         escapeAttr(p.id) + '\')">编辑</button>' +
                     '</div>' +
-                '</div>';
+                '</div>');
             });
             if (providerState.envFallback) {
                 rows.push('<div class="pv-row pv-env">' +
                     '<div class="pv-main">' +
-                        '<div class="pv-name">.env 里的配置' +
+                        '<div class="pv-name">全站共用（.env）' +
                         '<span class="pv-dot on" aria-hidden="true"></span></div>' +
-                        '<div class="pv-sub">这里还没添加提供商，当前沿用 .env 的 ' +
-                        'DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL</div>' +
+                        '<div class="pv-sub">本账号还没添加提供商，当前沿用站点 .env 的 Key' +
+                        '（不是其他账号的）</div>' +
                     '</div></div>');
             }
             host.innerHTML = rows.join('') ||
@@ -4999,10 +5015,19 @@
         }
 
         function startAddProvider() {
+            if (!providerState.loggedIn) {
+                requireLogin('模型 API Key');
+                return;
+            }
             editingProviderId = null;
             providerFormValues(null);
             showProviderForm(true);
             document.getElementById('pvName').focus();
+        }
+
+        function providerGoLogin() {
+            closeApiKeyModal();
+            goLogin();
         }
 
         function editProvider(id) {
@@ -5034,6 +5059,7 @@
                 providerState.activeId = data.active_id || null;
                 providerState.editable = data.editable !== false;
                 providerState.envFallback = !!data.env_fallback;
+                providerState.loggedIn = data.logged_in !== false;
             } catch (e) {
                 providerState = { items: [], activeId: null, editable: true, envFallback: false };
             }
