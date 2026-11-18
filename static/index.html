@@ -1470,6 +1470,16 @@
             font-family: inherit; outline: none;
         }
         .pv-field input:focus { border-color: #4f7df3; }
+        .pv-field select {
+            width: 100%; box-sizing: border-box; padding: 9px 12px;
+            border: 1px solid #dde1e8; border-radius: 9px; font-size: 13px;
+            font-family: inherit; outline: none; background: #fff; color: inherit;
+            -webkit-appearance: none; appearance: none;
+            background-image: url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 L6 8 L9.4 4.6' fill='none' stroke='%237b8798' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 12px center;
+            padding-right: 32px;
+        }
+        .pv-field select:focus { border-color: #4f7df3; }
         .provider-status { min-height: 18px; font-size: 12px; color: #c0392b; margin: 2px 0 6px; }
         .provider-status.ok { color: #1f7a53; }
         .provider-del {
@@ -1483,6 +1493,7 @@
         html[data-theme="dark"] .pv-btn { background: #16202c; border-color: #2b3d52; color: #c8d6ea; }
         html[data-theme="dark"] .provider-add { background: #16202c; border-color: #2b3d52; color: #c8d6ea; }
         html[data-theme="dark"] .pv-field input { background: #101720; border-color: #2b3d52; color: #dbe3f0; }
+        html[data-theme="dark"] .pv-field select { background-color: #101720; border-color: #2b3d52; color: #dbe3f0; }
 
         /* ── 顶部「填写 API Key」按钮 ──
            两种状态，一眼能分清"还差什么"：
@@ -1532,21 +1543,6 @@
 
         /* 单 Key 输入框那套样式已随「模型提供商」改版删除；
            输入框改用 .pv-field，状态行改用 .provider-status。 */
-        #apiKeyModal .api-key-help {
-            text-align: left;
-            margin-top: 16px;
-            font-size: 12px;
-            color: #8892a4;
-            line-height: 1.8;
-        }
-        #apiKeyModal .api-key-help a {
-            color: #4f7df3;
-            text-decoration: none;
-        }
-        #apiKeyModal .api-key-help a:hover {
-            text-decoration: underline;
-        }
-
         /* ── 科研工作流面板 ── */
         #wfPanel {
             display: none;
@@ -4417,10 +4413,22 @@
                 ＋ 添加模型提供商
             </button>
             <div class="provider-form" id="providerForm" style="display:none;">
+                <label class="pv-field"><span>提供商</span>
+                    <select id="pvPreset" onchange="onProviderPresetChange()">
+                        <option value="deepseek">DeepSeek</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="dashscope">阿里云百炼（通义）</option>
+                        <option value="zhipu">智谱 GLM</option>
+                        <option value="moonshot">Moonshot（Kimi）</option>
+                        <option value="ollama">本地 Ollama</option>
+                        <option value="custom">自定义…</option>
+                    </select></label>
                 <label class="pv-field"><span>名称</span>
                     <input id="pvName" placeholder="如 DeepSeek" autocomplete="off" /></label>
-                <label class="pv-field"><span>Base URL</span>
-                    <input id="pvBase" placeholder="https://api.deepseek.com/v1" autocomplete="off" /></label>
+                <!-- 选预设时地址自动带出、这里不显示；只有「自定义…」才需要手填 -->
+                <label class="pv-field" id="pvBaseWrap" style="display:none;">
+                    <span>Base URL</span>
+                    <input id="pvBase" placeholder="https://你的服务/v1" autocomplete="off" /></label>
                 <label class="pv-field"><span>API Key</span>
                     <input id="pvKey" type="password" placeholder="sk-..." autocomplete="off" /></label>
                 <label class="pv-field"><span>模型</span>
@@ -4432,11 +4440,6 @@
                 </div>
                 <button type="button" class="provider-del" id="pvDeleteBtn"
                         onclick="deleteEditingProvider()">删除这家提供商</button>
-            </div>
-            <div class="api-key-help" id="providerHelp">
-                还没有 Key？<a href="https://platform.deepseek.com/api_keys" target="_blank"
-                              rel="noopener">去 DeepSeek 控制台申请 →</a><br />
-                只写进本机的 <code>providers.json</code>（不进版本库），页面只回显头尾。
             </div>
         </div>
     </div>
@@ -4928,11 +4931,58 @@
                 '<div class="pv-empty">还没有添加模型提供商。</div>';
         }
 
+        /* 常见服务的地址/默认模型。选了预设就不用背 URL ——
+           这也避免了手抄地址少写 /v1、写成 http 之类的低级错误。 */
+        const PROVIDER_PRESETS = {
+            deepseek:  { name: 'DeepSeek',   base: 'https://api.deepseek.com/v1',                        model: 'deepseek-chat' },
+            openai:    { name: 'OpenAI',     base: 'https://api.openai.com/v1',                          model: 'gpt-4o-mini' },
+            dashscope: { name: '阿里云百炼', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+            zhipu:     { name: '智谱 GLM',   base: 'https://open.bigmodel.cn/api/paas/v4',               model: 'glm-4-flash' },
+            moonshot:  { name: 'Moonshot',   base: 'https://api.moonshot.cn/v1',                         model: 'moonshot-v1-8k' },
+            ollama:    { name: '本地 Ollama', base: 'http://127.0.0.1:11434/v1',                         model: 'qwen2.5' },
+            custom:    { name: '',           base: '',                                                 model: '' }
+        };
+
+        /**
+         * 选了预设：自动填名称/地址/默认模型，并隐藏地址输入框。
+         * `fill === false` 用于"编辑已有提供商"——只挂上下拉，不覆盖已存的值。
+         */
+        function onProviderPresetChange(fill) {
+            const sel = document.getElementById('pvPreset');
+            if (!sel) return;
+            const id = sel.value;
+            const preset = PROVIDER_PRESETS[id] || PROVIDER_PRESETS.custom;
+            const wrap = document.getElementById('pvBaseWrap');
+            if (wrap) wrap.style.display = (id === 'custom') ? 'block' : 'none';
+            if (fill === false) return;
+            if (preset.name) document.getElementById('pvName').value = preset.name;
+            if (preset.base) document.getElementById('pvBase').value = preset.base;
+            if (preset.model) document.getElementById('pvModel').value = preset.model;
+        }
+
+        /** 已有提供商的 base_url 对应哪个预设？（对不上就是"自定义"） */
+        function presetForBase(base) {
+            const b = String(base || '').replace(/\/+$/, '');
+            for (const key in PROVIDER_PRESETS) {
+                if (key === 'custom') continue;
+                if (PROVIDER_PRESETS[key].base.replace(/\/+$/, '') === b) return key;
+            }
+            return 'custom';
+        }
+
         function providerFormValues(id) {
             const p = (providerState.items || []).filter(function (x) { return x.id === id; })[0];
-            document.getElementById('pvName').value = p ? p.name : '';
-            document.getElementById('pvBase').value = p ? (p.base_url || '') : '';
-            document.getElementById('pvModel').value = p ? (p.model || '') : '';
+            const sel = document.getElementById('pvPreset');
+            if (p) {
+                sel.value = presetForBase(p.base_url);
+                onProviderPresetChange(false);      // 只切换显隐，不覆盖已存值
+                document.getElementById('pvName').value = p.name;
+                document.getElementById('pvBase').value = p.base_url || '';
+                document.getElementById('pvModel').value = p.model || '';
+            } else {
+                sel.value = 'deepseek';
+                onProviderPresetChange();           // 新加：带出 DeepSeek 的默认值
+            }
             const keyEl = document.getElementById('pvKey');
             keyEl.value = '';
             keyEl.placeholder = (p && p.key_set)

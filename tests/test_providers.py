@@ -7,6 +7,7 @@
 2. 和 `core/llm.py` 的接线：**提供商优先于 .env**（这条最容易写反）
 3. `/api/providers` 的 CRUD 与权限（本机可改；公网未登录不可改）
 """
+import io
 import json
 import os
 import sys
@@ -166,6 +167,21 @@ import subprocess  # noqa: E402
 out = subprocess.run(["git", "check-ignore", "providers.json"], cwd=ROOT,
                      capture_output=True, text=True).returncode
 ok("providers.json 不进版本库（含真实 Key）", out == 0, out)
+
+# ── 4. 界面结构（"提供商下拉 + 删掉说明文字"）──────────────────
+html_src = io.open(os.path.join(ROOT, "static", "index.html"), encoding="utf-8").read()
+ok("弹窗里不再有那段说明文字",
+   "providerHelp" not in html_src and "还没有 Key？" not in html_src)
+ok("有提供商下拉（不用手背 Base URL）", 'id="pvPreset"' in html_src)
+ok("下拉里含常见服务与「自定义」",
+   all(k in html_src for k in ("value=\"deepseek\"", "value=\"openai\"",
+                               "value=\"custom\"", "自定义")))
+ok("Base URL 输入默认隐藏（选自定义才出现）",
+   'id="pvBaseWrap"' in html_src and "pvBaseWrap\" style=\"display:none;\"" in html_src)
+ok("选预设会自动带出名称/地址/模型",
+   "PROVIDER_PRESETS" in html_src and "onProviderPresetChange" in html_src)
+ok("编辑已有提供商时不会被预设覆盖（传 fill=false）",
+   "onProviderPresetChange(false)" in html_src)
 
 n = sum(1 for _, c_, _ in R if c_)
 for name, cond, got in R:
