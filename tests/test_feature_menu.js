@@ -31,15 +31,26 @@ function ok(name, cond, got) {
 }
 
 // ── 1. 头部结构 ────────────────────────────────────────────────
-ok('头部右侧是功能按钮组，不再有「📚 功能」下拉',
-   /id="headerFeatures"/.test(html) && !/id="featureBtn"/.test(html)
-   && !/id="featureMenu"/.test(html));
+ok('头部右侧是一个「功能」下拉（五个功能收进菜单）',
+   /id="featureBtn"/.test(html) && /id="featureMenu"/.test(html)
+   && !/id="headerFeatures"/.test(html));
 ok('功能按钮按 FEATURES 渲染（加功能只改一处）',
    /function renderHeaderFeatures\(\)[\s\S]{0,900}FEATURES\.map/.test(script));
-ok('点头部按钮仍走 openFeatureFromMenu（登录门槛/显示方式都不变）',
-   /class="hf-btn[\s\S]{0,500}openFeatureFromMenu\('/.test(script));
-ok('按钮带"已打开"状态（is-open）',
-   /\.hf-btn\.is-open/.test(css) && /is-open/.test(script));
+ok('点菜单项仍走 openFeatureFromMenu（登录门槛/显示方式都不变）',
+   /class="feature-item[\s\S]{0,600}openFeatureFromMenu\('/.test(script));
+ok('菜单项带"已打开"状态（is-open）',
+   /\.feature-item\.is-open/.test(css) && /is-open/.test(script));
+ok('点「功能」按钮真的能开关下拉（不是空实现）',
+   /function toggleFeatureMenu\(ev\)[\s\S]{0,700}menu\.style\.display = 'block'/.test(script)
+   && /function toggleFeatureMenu\(ev\)[\s\S]{0,500}closeFeatureMenu\(\)/.test(script));
+ok('打开前刷新一次"已打开"标记',
+   /function toggleFeatureMenu\(ev\)[\s\S]{0,500}renderHeaderFeatures\(\)/.test(script));
+ok('按钮用 aria-expanded 反映开合',
+   /aria-expanded="false"/.test(html)
+   && /setAttribute\('aria-expanded', 'true'\)/.test(script)
+   && /setAttribute\('aria-expanded', 'false'\)/.test(script));
+ok('选了菜单项后菜单收起',
+   /function openFeatureFromMenu\(id\)[\s\S]{0,140}closeFeatureMenu\(\)/.test(script));
 ok('原来的四个按钮已合并（不再单独占位）',
    ['btnFavorites', 'btnWorkflow', 'btnTable', 'btnPolish']
      .every((id) => !new RegExp('id="' + id + '"').test(html)));
@@ -154,8 +165,9 @@ ok('空白页高度受控：图标/文字收紧 + 插画有高度上限（不撑
    && /\.welcome-art \{[\s\S]{0,500}max-height: 26vh/.test(css));
 ok('空白页不再摆功能按钮（功能已搬到头部）',
    !/id="emptyFeatures"/.test(html) && !/\.empty-feature \{/.test(css));
-ok('下拉菜单的旧结构已彻底移除',
-   !/class="feature-wrap"/.test(html) && !/id="featureMenu"/.test(html));
+ok('菜单用 .feature-wrap 包裹（相对按钮定位，不被登出按钮带偏）',
+   /class="feature-wrap"/.test(html)
+   && /\.feature-wrap \{ position: relative; display: inline-flex; \}/.test(css));
 ok('润色有五种风格（含"生动有画面感"）',
    /value="vivid"/.test(html) && /生动有画面感/.test(html)
    && /value="logic"/.test(html) && /强化逻辑/.test(html));

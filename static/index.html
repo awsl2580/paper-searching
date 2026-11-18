@@ -97,50 +97,11 @@
             flex-wrap: nowrap;
             flex-shrink: 0;
         }
-        /* 头部右侧的功能按钮（替代原来的「📚 功能」下拉）：
-           每个功能一颗胶囊，点开仍走同一套 toggleFeaturePanel。 */
-        .header-features {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            flex-wrap: nowrap;
-            max-width: 100%;
-        }
-        .hf-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            height: 30px;
-            padding: 0 11px;
-            border: 1px solid rgba(255, 255, 255, .34);
-            border-radius: 999px;
-            background: rgba(255, 255, 255, .10);
-            color: #fff;
-            font-family: inherit;
-            font-size: 12.5px;
-            line-height: 1;
-            cursor: pointer;
-            white-space: nowrap;
-            transition: background .16s ease, border-color .16s ease, transform .12s ease;
-        }
-        .hf-btn:hover {
-            background: rgba(255, 255, 255, .22);
-            border-color: rgba(255, 255, 255, .55);
-        }
-        .hf-btn:active { transform: translateY(1px); }
-        /* 这个功能正开着：实心白底，一眼能看出状态 */
-        .hf-btn.is-open {
-            background: #fff;
-            border-color: #fff;
-            color: #1f3864;
-        }
-        .hf-emoji { font-size: 13px; line-height: 1; }
-        .hf-name { font-weight: 500; }
-        @media (max-width: 1180px) {
-            /* 窄屏只留图标，靠 title 提示，把宽度让给标题和登出 */
-            .hf-name { display: none; }
-            .hf-btn { padding: 0 9px; }
-        }
+        /* 头部右侧的「功能」按钮 + 下拉。
+           五个功能（收藏 / 文献表 / 名词解释 / 润色 / 科研工作流）收进一个下拉，
+           顶栏不再被五颗胶囊挤满（窄屏时尤其明显）。
+           按钮与菜单的外观不在这里定义，见下面 .feature-wrap / .feature-btn /
+           .feature-menu / .feature-item 那几条规则 —— 只保留一套，避免两处打架。 */
         /* 再窄：先收起品牌副标题，再收起模型徽章。
            顺序很重要 —— 功能按钮与登出是操作入口，不能被挤掉。 */
         @media (max-width: 900px) {
@@ -2637,6 +2598,28 @@
             text-align: left;
         }
         .feature-item:hover { background: #f4f7fd; }
+        /* 这个功能当前是开着的：底色 + 右侧「已打开」，下拉一开就能看出来 */
+        .feature-item.is-open { background: var(--accent-soft, #eef3ff); }
+        .feature-item .fi-open {
+            flex: 0 0 auto;
+            align-self: center;
+            font-size: 10.5px;
+            line-height: 1;
+            padding: 3px 6px;
+            border-radius: 999px;
+            color: #2b4acb;
+            background: #fff;
+            border: 1px solid #cfdcf8;
+        }
+        html[data-theme="dark"] .feature-item.is-open { background: #1b2a3d; }
+        html[data-theme="dark"] .feature-item .fi-open {
+            color: #9ec1ff;
+            background: #14202e;
+            border-color: #2b3d52;
+        }
+        /* 「功能」按钮里的图标与下拉箭头，跟文字同一条基线 */
+        .feature-btn .feature-btn-ico { font-size: 13px; line-height: 1; }
+        .feature-btn .feature-caret { display: inline-flex; align-items: center; }
         .feature-item .fi-emoji { font-size: 15px; line-height: 1.3; }
         .feature-item .fi-main { flex: 1; min-width: 0; }
         .feature-item .fi-name {
@@ -3982,11 +3965,22 @@
                         onclick="openApiKeyModal()"
                         title="填写 / 更换 DeepSeek API Key"
                         aria-label="填写或更换 DeepSeek API Key">🔑</button>
-                <!-- 功能按钮直接排在头部右侧（原来是一个「📚 功能」下拉）。
-                     FEATURES 仍是唯一数据源：这里按它渲染，点开走同一套
-                     toggleFeaturePanel（登录门槛、首次"小窗还是对话框"都在里面）。 -->
-                <div class="header-features" id="headerFeatures" role="group"
-                     aria-label="功能"></div>
+                <!-- 五个功能收进一个「功能」下拉（收藏 / 文献表 / 名词解释 /
+                     润色 / 科研工作流）。FEATURES 仍是唯一数据源：菜单项由
+                     renderHeaderFeatures() 按它渲染，点开走同一套
+                     toggleFeaturePanel（登录门槛、显示方式询问都在里面）。 -->
+                <div class="feature-wrap">
+                    <button type="button" class="btn btn-outline btn-sm feature-btn"
+                            id="featureBtn" onclick="toggleFeatureMenu(event)"
+                            aria-haspopup="true" aria-expanded="false"
+                            title="功能：收藏 / 文献表 / 名词解释 / 润色 / 科研工作流">
+                        <span class="feature-btn-ico" aria-hidden="true">🧩</span>
+                        <span>功能</span>
+                        <span class="feature-caret"><svg class="caret-ico" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 4.6 L6 8 L9.4 4.6"></path></svg></span>
+                    </button>
+                    <div class="feature-menu" id="featureMenu" role="menu"
+                         aria-label="功能" style="display:none;"></div>
+                </div>
                 <button class="btn btn-outline btn-sm" id="btnLogout" style="display:none;" onclick="logout()">登出</button>
             </div>
         </header>
@@ -5421,19 +5415,33 @@
             return openFeaturePanel(id, panelMode());
         }
 
-        // ── 右上角的功能按钮（原来是一个「📚 功能」下拉，现在直接排开）──
+        // ── 右上角「功能」下拉（五个功能统一从这里进）─────────────
+        /**
+         * 按 FEATURES 渲染下拉菜单项。
+         *
+         * 加功能只需要往 FEATURES 里加一条 —— 菜单、登录门槛、显示方式
+         * 全部跟着走，不用改这里的结构。
+         * 每次打开菜单前都会重跑一次，所以"已打开"标记始终是新的。
+         */
         function renderHeaderFeatures() {
-            const host = document.getElementById('headerFeatures');
-            if (!host) return;
-            host.innerHTML = FEATURES.map(function (f) {
-                const open = isSidePanelOpen(f.id);
-                return '<button type="button" class="hf-btn' + (open ? ' is-open' : '') + '"' +
+            const menu = document.getElementById('featureMenu');
+            if (!menu) return;
+            menu.innerHTML = FEATURES.map(function (f) {
+                const open = isSidePanelOpen(f.id) || inlineActiveId === f.id;
+                return '<button type="button" class="feature-item' +
+                    (open ? ' is-open' : '') + '"' +
+                    ' role="menuitem"' +
                     ' data-feature="' + escapeAttr(f.id) + '"' +
+                    ' aria-current="' + (open ? 'true' : 'false') + '"' +
                     ' title="' + escapeAttr(f.desc) + '"' +
-                    ' aria-pressed="' + (open ? 'true' : 'false') + '"' +
                     " onclick=\"openFeatureFromMenu('" + escapeAttr(f.id) + "')\">" +
-                    '<span class="hf-emoji" aria-hidden="true">' + escapeHtml(f.emoji) + '</span>' +
-                    '<span class="hf-name">' + escapeHtml(f.name) + '</span></button>';
+                    '<span class="fi-emoji" aria-hidden="true">' + escapeHtml(f.emoji) + '</span>' +
+                    '<span class="fi-main">' +
+                    '<span class="fi-name">' + escapeHtml(f.name) + '</span>' +
+                    '<span class="fi-desc">' + escapeHtml(f.desc) + '</span>' +
+                    '</span>' +
+                    (open ? '<span class="fi-open">已打开</span>' : '') +
+                    '</button>';
             }).join('');
         }
 
@@ -5501,9 +5509,22 @@
             sendMessage();
         }
 
+        /**
+         * 点「功能」按钮：开/关下拉。
+         *
+         * 用 style.display 而不是 class 切换，是为了和模型下拉、以及
+         * 已有的"点外面收起 / Esc 收起"两处判断（都看 style.display）
+         * 保持同一套约定 —— 三处各写一套状态很容易有一处忘记同步。
+         */
         function toggleFeatureMenu(ev) {
-            // 下拉已经取消（功能按钮直接排在头部），保留空实现兼容旧调用
             if (ev) ev.stopPropagation();
+            const menu = document.getElementById('featureMenu');
+            const btn = document.getElementById('featureBtn');
+            if (!menu) return;
+            if (menu.style.display !== 'none') { closeFeatureMenu(); return; }
+            renderHeaderFeatures();          // 打开前刷新"已打开"标记
+            menu.style.display = 'block';
+            if (btn) btn.setAttribute('aria-expanded', 'true');
         }
 
         function closeFeatureMenu() {
@@ -10213,7 +10234,7 @@
         loadApiConfig();             // 没配 Key 时把顶部按钮点亮（不弹报错）
         setSourcePref(sourcePref);   // 恢复上次选的文献来源
         loadSources();               // 显示当前可用的中文源
-        renderHeaderFeatures();      // 右上角的五个功能按钮（同一份 FEATURES）
+        renderHeaderFeatures();      // 右上角「功能」下拉的菜单项（同一份 FEATURES）
         renderGuessChips();          // 新对话空白区的「猜你想搜」（随机 4 条）
         applyTheme();                // 主题（颜色/深浅）以 localStorage 为准
         applyBackground();           // 自定义背景图（如果有）

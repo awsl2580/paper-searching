@@ -39,10 +39,13 @@ ok('菜单默认是收起的', /id="modelMenu"[\s\S]{0,100}style="display:none"/
 ok('默认显示 DeepSeek-V4.1-Flash', /id="modelPickName">DeepSeek-V4\.1-Flash</.test(html));
 ok('顶栏品牌不再出现 AI4S（给功能按钮让出宽度）',
    /<h1>[\s\S]{0,500}DeepSeek <span>· 科学智能体<\/span>[\s\S]{0,40}<\/h1>/.test(html));
-ok('顶栏强制单行（header / actions / features 都不换行）',
+ok('顶栏强制单行（header / actions 不换行，功能收进一个 inline-flex 包裹）',
    /\.header \{[\s\S]{0,800}flex-wrap: nowrap/.test(html)
    && /\.header-actions \{[\s\S]{0,400}flex-wrap: nowrap/.test(html)
-   && /\.header-features \{[\s\S]{0,300}flex-wrap: nowrap/.test(html)
+   // 五个功能现在是「🧩 功能」一个按钮 + 绝对定位的下拉，
+   // 包裹层本身不参与换行（.header-features 那套平铺样式已随改版删除）。
+   && /\.feature-wrap \{ position: relative; display: inline-flex; \}/.test(html)
+   && !/\.header-features \{/.test(html)
    && /\.header h1 \{[\s\S]{0,400}white-space: nowrap/.test(html));
 ok('空间不足时逐级收起副标题 / 模型徽章',
    /@media \(max-width: 900px\)[\s\S]{0,240}\.header h1 span \{ display: none/.test(html)
