@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "active_id": null,
+  "providers": [],
+  "_note": "模型提供商种子（进版本库，不含任何 Key）。真实配置在 providers.json（不进版本库）。需要预置时把本文件复制成 providers.json，再往 providers 里加条目；api_key 必须是明文 Key（仅本机保存，不要提交）。"
+}

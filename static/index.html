@@ -1413,6 +1413,77 @@
             cursor: default;
         }
 
+        /* ── 模型提供商（设置 → 模型）───────────────────────────── */
+        .provider-modal { width: min(560px, calc(100vw - 40px)); max-height: min(78vh, 720px); overflow-y: auto; }
+        .provider-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; text-align: left; }
+        .provider-head h3 { margin: 0 0 6px; text-align: left; }
+        .provider-head .prompt-text { text-align: left; margin: 0; }
+        .provider-close {
+            flex: 0 0 auto; width: 28px; height: 28px; border: none; border-radius: 8px;
+            background: transparent; color: #7b8798; font-size: 15px; line-height: 1;
+            cursor: pointer; padding: 0;
+        }
+        .provider-close:hover { background: #f1f4f9; color: #33415c; }
+        .provider-list { margin: 14px 0 10px; display: flex; flex-direction: column; gap: 8px; }
+        .pv-row {
+            display: flex; align-items: center; gap: 10px;
+            border: 1px solid #e3e8f2; border-radius: 12px; padding: 11px 12px; background: #fff;
+        }
+        .pv-row.is-active { border-color: #c9d8f5; background: #f7faff; }
+        .pv-row.pv-env { border-style: dashed; }
+        .pv-main { flex: 1; min-width: 0; }
+        .pv-name {
+            display: flex; align-items: center; gap: 7px;
+            font-size: 14px; font-weight: 600; color: #1f2d45;
+        }
+        .pv-sub {
+            margin-top: 3px; font-size: 11.5px; color: #7b8798;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .pv-dot { width: 8px; height: 8px; border-radius: 50%; background: #c8d0dc; flex: 0 0 auto; }
+        .pv-dot.on { background: #22a06b; box-shadow: 0 0 0 3px rgba(34,160,107,.14); }
+        .pv-active {
+            font-size: 10.5px; line-height: 1; padding: 3px 7px; border-radius: 999px;
+            color: #2b4acb; background: #eaf0ff; border: 1px solid #cfdcf8;
+        }
+        .pv-ops { display: flex; gap: 6px; flex: 0 0 auto; }
+        .pv-btn {
+            border: 1px solid #d7dfec; background: #fff; color: #33415c;
+            border-radius: 9px; padding: 6px 12px; font-size: 12.5px; cursor: pointer;
+            font-family: inherit;
+        }
+        .pv-btn:hover { border-color: #4f7df3; color: #2b4acb; }
+        .pv-empty { font-size: 12.5px; color: #8892a4; text-align: center; padding: 14px 0; }
+        .provider-add {
+            width: 100%; margin: 2px 0 4px; padding: 11px;
+            border: 1px dashed #c9d3e4; border-radius: 12px; background: #fff;
+            color: #5a6b85; font-size: 13px; cursor: pointer; font-family: inherit;
+        }
+        .provider-add:hover { border-color: #4f7df3; color: #2b4acb; background: #f7faff; }
+        .provider-form { margin: 12px 0 4px; text-align: left; }
+        /* .prompt-content 整体居中，表单里的标签/输入必须显式左对齐 */
+        .pv-field { display: block; margin-bottom: 9px; text-align: left; }
+        .pv-field span { display: block; font-size: 11.5px; color: #7b8798; margin-bottom: 4px; }
+        .pv-field input {
+            width: 100%; box-sizing: border-box; padding: 9px 12px;
+            border: 1px solid #dde1e8; border-radius: 9px; font-size: 13px;
+            font-family: inherit; outline: none;
+        }
+        .pv-field input:focus { border-color: #4f7df3; }
+        .provider-status { min-height: 18px; font-size: 12px; color: #c0392b; margin: 2px 0 6px; }
+        .provider-status.ok { color: #1f7a53; }
+        .provider-del {
+            width: 100%; margin-top: 8px; padding: 8px; border: none; background: none;
+            color: #b3243a; font-size: 12px; cursor: pointer; font-family: inherit;
+        }
+        .provider-del:hover { text-decoration: underline; }
+        html[data-theme="dark"] .pv-row { background: #16202c; border-color: #263345; }
+        html[data-theme="dark"] .pv-row.is-active { background: #182636; border-color: #2f4a6b; }
+        html[data-theme="dark"] .pv-name { color: #dbe3f0; }
+        html[data-theme="dark"] .pv-btn { background: #16202c; border-color: #2b3d52; color: #c8d6ea; }
+        html[data-theme="dark"] .provider-add { background: #16202c; border-color: #2b3d52; color: #c8d6ea; }
+        html[data-theme="dark"] .pv-field input { background: #101720; border-color: #2b3d52; color: #dbe3f0; }
+
         /* ── 顶部「填写 API Key」按钮 ──
            两种状态，一眼能分清"还差什么"：
              * 还没填 → 金橙色 + 呼吸光晕，提示这里要补；
@@ -1459,33 +1530,10 @@
             #btnApiKey { padding: 4px 9px; }
         }
 
-        /* ── 填写 API Key 弹窗里的输入框 ── */
-        #apiKeyModal .api-key-field {
-            width: 100%;
-            box-sizing: border-box;
-            padding: 11px 14px;
-            border: 1px solid #dde1e8;
-            border-radius: 10px;
-            font-size: 14px;
-            font-family: 'SF Mono', Consolas, monospace;
-            outline: none;
-            text-align: left;   /* 弹窗整体居中，输入框里的 Key 必须左对齐才好核对 */
-            transition: border-color 0.2s;
-        }
-        #apiKeyModal .api-key-field:focus {
-            border-color: #4f7df3;
-        }
-        #apiKeyModal .api-key-status {
-            min-height: 18px;
-            font-size: 12.5px;
-            color: #e74c5e;
-            margin: 8px 0 14px;
-            line-height: 1.5;
-        }
-        #apiKeyModal .api-key-status.ok {
-            color: #16a34a;
-        }
+        /* 单 Key 输入框那套样式已随「模型提供商」改版删除；
+           输入框改用 .pv-field，状态行改用 .provider-status。 */
         #apiKeyModal .api-key-help {
+            text-align: left;
             margin-top: 16px;
             font-size: 12px;
             color: #8892a4;
@@ -4351,26 +4399,44 @@
     <!-- ===== 填写 API Key 弹窗 ===== -->
     <!-- 打开时机只有三个：①点右上角按钮 ②点发送/润色/工作流但还没配 Key
          ③服务端回 need_api_key。任何时候都不会自动弹，也不在界面上写报错。 -->
+    <!-- ===== 模型提供商（设置 → 模型）＝
+         一家一条：名称 + Base URL + 各自的 API Key；可切换/编辑/删除。
+         DeepSeek 走 OpenAI 兼容协议，所以同一套代码能指向任何兼容服务。 -->
     <div id="apiKeyModal">
-        <div class="prompt-content">
-            <div class="prompt-icon">🔑</div>
-            <h3>填写 DeepSeek API Key</h3>
-            <p class="prompt-text">
-                检索问答、摘要润色、科研工作流都要调用 DeepSeek。<br />
-                把 Key 填在这里，<strong>保存后立刻生效，不用重启</strong>。
-            </p>
-            <input type="password" id="apiKeyInput" class="api-key-field"
-                   placeholder="sk-..." autocomplete="off" spellcheck="false"
-                   onkeydown="if(event.key==='Enter'){event.preventDefault();saveApiKey();}" />
-            <div class="api-key-status" id="apiKeyStatus"></div>
-            <div class="prompt-actions">
-                <button class="btn-cancel" onclick="closeApiKeyModal()">暂不填写</button>
-                <button class="btn-go-login" id="apiKeySaveBtn" onclick="saveApiKey()">保存</button>
+        <div class="prompt-content provider-modal">
+            <div class="provider-head">
+                <div>
+                    <h3>模型</h3>
+                    <p class="prompt-text">填入各提供商的 API 密钥即可使用其模型。</p>
+                </div>
+                <button type="button" class="provider-close" onclick="closeApiKeyModal()"
+                        aria-label="关闭">✕</button>
             </div>
-            <div class="api-key-help">
+            <div class="provider-list" id="providerList"></div>
+            <button type="button" class="provider-add" onclick="startAddProvider()">
+                ＋ 添加模型提供商
+            </button>
+            <div class="provider-form" id="providerForm" style="display:none;">
+                <label class="pv-field"><span>名称</span>
+                    <input id="pvName" placeholder="如 DeepSeek" autocomplete="off" /></label>
+                <label class="pv-field"><span>Base URL</span>
+                    <input id="pvBase" placeholder="https://api.deepseek.com/v1" autocomplete="off" /></label>
+                <label class="pv-field"><span>API Key</span>
+                    <input id="pvKey" type="password" placeholder="sk-..." autocomplete="off" /></label>
+                <label class="pv-field"><span>模型</span>
+                    <input id="pvModel" placeholder="deepseek-chat（可留空）" autocomplete="off" /></label>
+                <div class="provider-status" id="providerStatus"></div>
+                <div class="prompt-actions">
+                    <button type="button" class="btn-cancel" onclick="cancelProviderForm()">取消</button>
+                    <button type="button" class="btn-go-login" id="pvSaveBtn" onclick="saveProvider()">保存</button>
+                </div>
+                <button type="button" class="provider-del" id="pvDeleteBtn"
+                        onclick="deleteEditingProvider()">删除这家提供商</button>
+            </div>
+            <div class="api-key-help" id="providerHelp">
                 还没有 Key？<a href="https://platform.deepseek.com/api_keys" target="_blank"
                               rel="noopener">去 DeepSeek 控制台申请 →</a><br />
-                只写进本机的 `.env`（不进版本库，没有这个文件会自动生成），页面只回显头尾。
+                只写进本机的 <code>providers.json</code>（不进版本库），页面只回显头尾。
             </div>
         </div>
     </div>
@@ -4810,19 +4876,214 @@
             applyApiKeyState();
         }
 
-        function openApiKeyModal() {
-            const status = document.getElementById('apiKeyStatus');
-            const inputEl = document.getElementById('apiKeyInput');
-            if (apiKeySet) {
-                status.classList.add('ok');
-                status.textContent = '当前已配置：' + apiKeyHint + '，填入新的 Key 即可替换。';
-            } else {
-                status.classList.remove('ok');
-                status.textContent = '';
+        /* ── 模型提供商（设置 → 模型）──────────────────────────────
+           一家一条记录：名称 + Base URL + 自己的 Key。
+           当前生效的那家带绿点与「当前使用」；可切换、编辑、删除。
+           数据落在 providers.json（不进版本库），接口见 /api/providers。 */
+        let providerState = { items: [], activeId: null, editable: true, envFallback: false };
+        let editingProviderId = null;
+
+        function providerStatusEl(msg, ok) {
+            const el = document.getElementById('providerStatus');
+            if (!el) return;
+            el.textContent = msg || '';
+            el.classList.toggle('ok', !!ok);
+        }
+
+        function renderProviderList() {
+            const host = document.getElementById('providerList');
+            if (!host) return;
+            const items = providerState.items || [];
+            const rows = items.map(function (p) {
+                const dot = '<span class="pv-dot' + (p.key_set ? ' on' : '') + '" aria-hidden="true"></span>';
+                // 状态放前面：这一行是 nowrap + 省略号，放后面会被先截掉
+                const state = p.key_set
+                    ? '已配置 ' + escapeHtml(p.key_hint || '')
+                    : '未填写 Key';
+                const activeTag = p.active ? '<span class="pv-active">当前使用</span>' : '';
+                return '<div class="pv-row' + (p.active ? ' is-active' : '') + '">' +
+                    '<div class="pv-main">' +
+                        '<div class="pv-name">' + escapeHtml(p.name) + dot + activeTag + '</div>' +
+                        '<div class="pv-sub">' + state + ' · ' + escapeHtml(p.base_url || '') + '</div>' +
+                    '</div>' +
+                    '<div class="pv-ops">' +
+                        (p.active ? '' :
+                            '<button type="button" class="pv-btn" onclick="activateProvider(\'' +
+                            escapeAttr(p.id) + '\')">使用</button>') +
+                        '<button type="button" class="pv-btn" onclick="editProvider(\'' +
+                        escapeAttr(p.id) + '\')">编辑</button>' +
+                    '</div>' +
+                '</div>';
+            });
+            if (providerState.envFallback) {
+                rows.push('<div class="pv-row pv-env">' +
+                    '<div class="pv-main">' +
+                        '<div class="pv-name">.env 里的配置' +
+                        '<span class="pv-dot on" aria-hidden="true"></span></div>' +
+                        '<div class="pv-sub">这里还没添加提供商，当前沿用 .env 的 ' +
+                        'DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL</div>' +
+                    '</div></div>');
             }
-            inputEl.value = '';
+            host.innerHTML = rows.join('') ||
+                '<div class="pv-empty">还没有添加模型提供商。</div>';
+        }
+
+        function providerFormValues(id) {
+            const p = (providerState.items || []).filter(function (x) { return x.id === id; })[0];
+            document.getElementById('pvName').value = p ? p.name : '';
+            document.getElementById('pvBase').value = p ? (p.base_url || '') : '';
+            document.getElementById('pvModel').value = p ? (p.model || '') : '';
+            const keyEl = document.getElementById('pvKey');
+            keyEl.value = '';
+            keyEl.placeholder = (p && p.key_set)
+                ? '留空 = 沿用 ' + (p.key_hint || '原来的 Key')
+                : 'sk-...';
+            document.getElementById('pvDeleteBtn').style.display = p ? 'inline-block' : 'none';
+            providerStatusEl('');
+        }
+
+        function showProviderForm(show) {
+            document.getElementById('providerForm').style.display = show ? 'block' : 'none';
+            document.getElementById('providerList').style.display = show ? 'none' : 'block';
+            document.querySelector('.provider-add').style.display = show ? 'none' : 'block';
+        }
+
+        function startAddProvider() {
+            editingProviderId = null;
+            providerFormValues(null);
+            showProviderForm(true);
+            document.getElementById('pvName').focus();
+        }
+
+        function editProvider(id) {
+            editingProviderId = id;
+            providerFormValues(id);
+            showProviderForm(true);
+            document.getElementById('pvName').focus();
+        }
+
+        function cancelProviderForm() {
+            showProviderForm(false);
+            editingProviderId = null;
+        }
+
+        function syncApiKeyStateFromProviders() {
+            const active = (providerState.items || []).filter(function (p) { return p.active; })[0];
+            const activeOk = !!(active && active.key_set);
+            apiKeySet = activeOk || !!providerState.envFallback;
+            apiKeyHint = activeOk ? (active.key_hint || '')
+                : (apiKeySet ? '（来自 .env）' : '');
+            applyApiKeyState();
+        }
+
+        async function loadProviders() {
+            try {
+                const resp = await fetch('/api/providers', { credentials: 'include' });
+                const data = await resp.json();
+                providerState.items = data.providers || [];
+                providerState.activeId = data.active_id || null;
+                providerState.editable = data.editable !== false;
+                providerState.envFallback = !!data.env_fallback;
+            } catch (e) {
+                providerState = { items: [], activeId: null, editable: true, envFallback: false };
+            }
+            renderProviderList();
+            syncApiKeyStateFromProviders();
+        }
+
+        async function saveProvider() {
+            const btn = document.getElementById('pvSaveBtn');
+            const name = document.getElementById('pvName').value.trim();
+            if (!name) {
+                providerStatusEl('请先填写提供商名称');
+                document.getElementById('pvName').focus();
+                return;
+            }
+            btn.disabled = true;
+            btn.textContent = '保存中…';
+            try {
+                const resp = await fetch('/api/providers', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                        id: editingProviderId || '',
+                        name: name,
+                        base_url: document.getElementById('pvBase').value.trim(),
+                        api_key: document.getElementById('pvKey').value.trim(),
+                        model: document.getElementById('pvModel').value.trim(),
+                    }),
+                });
+                const data = await resp.json();
+                if (!data.success) {
+                    providerStatusEl('❌ ' + (data.error || '保存失败'));
+                    return;
+                }
+                if (data.list) {
+                    providerState.items = data.list.providers || [];
+                    providerState.activeId = data.list.active_id || null;
+                    providerState.envFallback = !!data.list.env_fallback;
+                }
+                providerStatusEl('✅ 已保存，立即生效', true);
+                renderProviderList();
+                syncApiKeyStateFromProviders();
+                setTimeout(function () { showProviderForm(false); editingProviderId = null; }, 600);
+            } catch (e) {
+                providerStatusEl('❌ 网络错误：' + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '保存';
+            }
+        }
+
+        async function deleteEditingProvider() {
+            if (!editingProviderId) return;
+            const p = (providerState.items || []).filter(function (x) { return x.id === editingProviderId; })[0];
+            if (!confirm('确定删除「' + ((p && p.name) || editingProviderId) + '」吗？')) return;
+            try {
+                const resp = await fetch('/api/providers/' + encodeURIComponent(editingProviderId), {
+                    method: 'DELETE', credentials: 'include',
+                });
+                const data = await resp.json();
+                if (!data.success) { providerStatusEl('❌ ' + (data.error || '删除失败')); return; }
+                if (data.list) {
+                    providerState.items = data.list.providers || [];
+                    providerState.activeId = data.list.active_id || null;
+                    providerState.envFallback = !!data.list.env_fallback;
+                }
+                editingProviderId = null;
+                showProviderForm(false);
+                renderProviderList();
+                syncApiKeyStateFromProviders();
+            } catch (e) {
+                providerStatusEl('❌ 网络错误：' + e.message);
+            }
+        }
+
+        async function activateProvider(id) {
+            try {
+                const resp = await fetch('/api/providers/' + encodeURIComponent(id) + '/activate', {
+                    method: 'POST', credentials: 'include',
+                });
+                const data = await resp.json();
+                if (!data.success) { providerStatusEl('❌ ' + (data.error || '切换失败')); return; }
+                if (data.list) {
+                    providerState.items = data.list.providers || [];
+                    providerState.activeId = data.list.active_id || null;
+                    providerState.envFallback = !!data.list.env_fallback;
+                }
+                renderProviderList();
+                syncApiKeyStateFromProviders();
+            } catch (e) {
+                providerStatusEl('❌ 网络错误：' + e.message);
+            }
+        }
+
+        function openApiKeyModal() {
             document.getElementById('apiKeyModal').classList.add('show');
-            setTimeout(() => inputEl.focus(), 50);
+            showProviderForm(false);
+            editingProviderId = null;
+            loadProviders();
         }
 
         function closeApiKeyModal() {
@@ -4837,50 +5098,6 @@
             if (apiKeySet) return false;
             openApiKeyModal();
             return true;
-        }
-
-        async function saveApiKey() {
-            const inputEl = document.getElementById('apiKeyInput');
-            const status = document.getElementById('apiKeyStatus');
-            const btn = document.getElementById('apiKeySaveBtn');
-            const key = inputEl.value.trim();
-
-            if (!key) {
-                status.classList.remove('ok');
-                status.textContent = '请先粘贴 API Key';
-                inputEl.focus();
-                return;
-            }
-
-            btn.disabled = true;
-            btn.textContent = '保存中…';
-            try {
-                const resp = await fetch('/api/config/api-key', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ api_key: key }),
-                    credentials: 'include',
-                });
-                const data = await resp.json();
-                if (data.success) {
-                    apiKeySet = true;
-                    apiKeyHint = data.api_key_hint || '';
-                    applyApiKeyState();
-                    status.classList.add('ok');
-                    status.textContent = '✅ 已保存（' + apiKeyHint + '），现在就能用了';
-                    inputEl.value = '';
-                    setTimeout(closeApiKeyModal, 900);
-                } else {
-                    status.classList.remove('ok');
-                    status.textContent = '❌ ' + (data.error || '保存失败');
-                }
-            } catch (e) {
-                status.classList.remove('ok');
-                status.textContent = '❌ 网络错误：' + e.message;
-            } finally {
-                btn.disabled = false;
-                btn.textContent = '保存';
-            }
         }
 
         /** 切到登录 / 注册模式（整页里的两个页签 + 表单差异都在这里） */

@@ -34,6 +34,7 @@ PY_TESTS = [
     ("端到端冒烟（静态白名单/鉴权/跨用户隔离）", "test_smoke.py"),
     ("升级检查（给老库补新表）", "test_migration.py"),
     ("环境变量加载（.env → .env.local 覆盖）", "test_env_config.py"),
+    ("模型提供商（多 Key 增删改/切换/优先级/权限）", "test_providers.py"),
     ("启动引导（venv 跟随本机 Python：重定向/重建）", "test_bootstrap_env.py"),
     ("启动体验（缺依赖可见/镜像重试/重定向不崩编码）", "test_startup_deps.py"),
     ("公网暴露前安全检查（源码不外泄/密钥/口令门禁）", "test_exposure.py"),

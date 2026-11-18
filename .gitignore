@@ -76,6 +76,12 @@ accounts.json
 accounts.json.*.tmp
 accounts.json.broken
 
+# 模型提供商（每家一条、各自一把 Key）——同样是本地数据，不进版本库。
+# 文件里是真 Key；需要预置时复制 providers.seed.json 再改。
+providers.json
+providers.json.*.tmp
+providers.json.broken
+
 # 权限诊断报告（排查 Windows 文件权限时生成）
 _acl_reports/
 

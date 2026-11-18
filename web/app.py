@@ -1556,10 +1556,79 @@ def _write_api_key(key: str) -> str:
     return env_file
 
 
+# ── 模型提供商（类似常见客户端的「模型 → 添加提供商」）──────────────
+# 一家一条记录，各自一把 Key；当前生效的那家由 providers.json 的 active_id 决定。
+# 这样不用改代码就能在 DeepSeek 官方 / 各家兼容服务 / 本地推理之间切换。
+try:
+    import provider_store  # noqa: E402
+except Exception:            # pragma: no cover - 极端情况下也不该挡住站点起来
+    provider_store = None
+
+
+@app.get("/api/providers")
+def list_providers():
+    """提供商列表（Key 只回显头尾）+ 当前生效的那一家。"""
+    if provider_store is None:
+        return jsonify({"success": False, "error": "提供商模块不可用"}), 500
+    data = provider_store.list_public()
+    data.update({
+        "success": True,
+        "editable": _api_key_editable(),
+        "env_fallback": data.get("env_fallback", False),
+    })
+    return jsonify(data)
+
+
+@app.post("/api/providers")
+def save_provider():
+    """新增或修改一家提供商。api_key 留空 = 沿用原来的（编辑时不必重填）。"""
+    if provider_store is None:
+        return jsonify({"success": False, "error": "提供商模块不可用"}), 500
+    if not _api_key_editable():
+        return jsonify({"success": False, "error": "请先登录后再修改模型提供商"}), 403
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        item = provider_store.upsert(data)
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except OSError as e:
+        return jsonify({"success": False, "error": f"写入 providers.json 失败：{e}"}), 500
+    # 立刻生效：llm.api_key()/base_url() 每次请求都重新解析，不用重启。
+    return jsonify({
+        "success": True,
+        "message": "已保存，立即生效（无需重启）",
+        "id": item["id"],
+        "list": provider_store.list_public(),
+    })
+
+
+@app.delete("/api/providers/<pid>")
+def remove_provider(pid):
+    if provider_store is None:
+        return jsonify({"success": False, "error": "提供商模块不可用"}), 500
+    if not _api_key_editable():
+        return jsonify({"success": False, "error": "请先登录后再修改模型提供商"}), 403
+    ok = provider_store.delete(pid)
+    if not ok:
+        return jsonify({"success": False, "error": "没有这一家提供商"}), 404
+    return jsonify({"success": True, "message": "已删除", "list": provider_store.list_public()})
+
+
+@app.post("/api/providers/<pid>/activate")
+def activate_provider(pid):
+    if provider_store is None:
+        return jsonify({"success": False, "error": "提供商模块不可用"}), 500
+    if not _api_key_editable():
+        return jsonify({"success": False, "error": "请先登录后再切换模型提供商"}), 403
+    if not provider_store.set_active(pid):
+        return jsonify({"success": False, "error": "没有这一家提供商"}), 404
+    return jsonify({"success": True, "message": "已切换", "list": provider_store.list_public()})
+
+
 @app.get("/api/config")
 def get_config():
-    """前端启动时问一次：Key 配了没、配的是哪一把（只给头尾）。"""
-    key = envconfig.api_key()
+    """前端启动时问一次：当前用的是哪家、Key 配了没（只给头尾）。"""
+    key = llm_layer.api_key()
     return jsonify({
         "success": True,
         "api_key_set": bool(key),

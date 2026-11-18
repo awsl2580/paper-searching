@@ -162,8 +162,31 @@ flowchart LR
 `.env` **不进版本库**（放 Key 与会话密钥），新 clone 下来没有这个文件也没关系：
 程序启动时会照 `.env.example` 自动生成一份，会话密钥取随机值。
 
-最省事的方式是启动后点页面右上角的「🔑 填写 API Key」，粘贴保存即可，**立刻生效、不用重启**。
-也可以手工复制模板并填写：
+最省事的方式是启动后点页面右上角的「🔑 填写 API Key」，会打开**「模型」设置**：
+
+* **一家一条提供商**：名称 / Base URL / 各自的 API Key，可添加、编辑、删除、切换；
+  当前生效的那家带绿点与「当前使用」。已配置的行只回显 Key 的头尾。
+* **保存即生效，不用重启**（也**不需要**把 Key 写进 `.env`）。
+* DeepSeek 走的是 OpenAI 兼容协议，所以同一套代码也能指向其它兼容服务
+  （中转站、本地 vLLM/Ollama 等）：新增一家、把 Base URL 填成它的 `/v1` 即可。
+* 配置存在本机 `providers.json`（**不进版本库**，里面有真 Key）；
+  暂时没添加任何提供商时，会**沿用 `.env` 里的 `DEEPSEEK_API_KEY`**（老配置不用迁移）。
+
+也可以完全不用页面、直接写配置文件（`providers.seed.json` 是空模板）：
+
+```json
+{
+  "version": 1,
+  "active_id": "deepseek",
+  "providers": [
+    {"id": "deepseek", "name": "DeepSeek",
+     "base_url": "https://api.deepseek.com/v1",
+     "api_key": "sk-...", "model": "deepseek-chat"}
+  ]
+}
+```
+
+或者手工复制 `.env.example` 并填写（老路子，仍然支持）：
 
 ```bash
 cp .env.example .env

@@ -106,9 +106,34 @@ BASE_URL = _normalize_base(_env("DEEPSEEK_BASE_URL", DEFAULT_BASE_URL))
 API_KEY = _env("DEEPSEEK_API_KEY")
 
 
+def _provider():
+    """当前生效的模型提供商（见 core/provider_store.py）。
+
+    优先用「设置 → 模型」里激活的那一家（可多家并存、各自一把 Key）；
+    一家都没配 Key 时退回 `.env` 的 DEEPSEEK_API_KEY，老配置不用迁移。
+    """
+    try:
+        import provider_store
+        return provider_store.resolve()
+    except Exception:
+        # 注意别在这里写 "id" 字段：本文件只允许出现两处模型 ID
+        # （tests/test_llm.py 有断言），缺 id 时调用方用 .get() 处理。
+        return {"base_url": BASE_URL, "api_key": "", "model": "", "name": "", "source": "env"}
+
+
 def api_key():
-    """当前生效的 DeepSeek API Key（没有就返回空串）。"""
-    return _env("DEEPSEEK_API_KEY") or API_KEY
+    """当前生效的 API Key。
+
+    **提供商优先**，其次 .env：否则在页面里切到另一家也不会生效 ——
+    .env 里那把会一直盖住它（这条优先级弄反过一次，切换看着成功实际没变）。
+    """
+    prov = (_provider().get("api_key") or "").strip()
+    return prov or (_env("DEEPSEEK_API_KEY") or API_KEY or "").strip()
+
+
+def base_url():
+    """当前生效的 Base URL：以提供商配置为准，没有则用 .env/默认。"""
+    return (_provider().get("base_url") or BASE_URL).rstrip("/")
 
 # 限流：默认 60 次/分钟（DeepSeek 按账号动态限流，这里保守起步，留余量给重试）
 RPM = max(1, _env_int("DEEPSEEK_RPM", 60))
@@ -551,7 +576,7 @@ def _post_chat(payload, timeout=TIMEOUT):
     payload = dict(payload)
     payload["model"] = api_model_for(payload.get("model"))
 
-    url = BASE_URL + "/chat/completions"
+    url = base_url() + "/chat/completions"
     headers = {
         "Content-Type": "application/json",
         "Authorization": "Bearer " + api_key(),
@@ -861,7 +886,7 @@ def chat_model(kind="chat", temperature=0.0, max_tokens=None, streaming=False,
     kwargs = dict(
         model=api_model_for(model),
         api_key=api_key(),
-        base_url=BASE_URL,
+        base_url=base_url(),
         temperature=temperature,
         timeout=TIMEOUT,
         max_retries=max(1, _env_int("DEEPSEEK_MAX_RETRIES", 4)),
