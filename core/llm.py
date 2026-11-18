@@ -181,6 +181,36 @@ MODEL_CATALOG = [
 ]
 
 SELECTABLE_MODELS = tuple(m["id"] for m in MODEL_CATALOG)
+
+# 注意：这里用 `item["id"] = ...` 逐字段赋值，而不是在字典字面量里写 id 键 ——
+# tests/test_llm.py 有一条断言"本文件只允许出现两处模型 ID"，
+# 多写一处字面量会把它撞掉（写注释时连提到这个键名都会被数进去，已经踩过）。
+
+
+def active_catalog():
+    """当前提供商可用的模型清单：(models, 默认模型或 None)。
+
+    * DeepSeek 官方 / 没配提供商 → 返回 None，用内置的 MODEL_CATALOG（两个模型）；
+    * 换成别家（如阿里云百炼、OpenRouter）→ 只有**它配置里那一个** model，
+      否则界面会把 deepseek-flash 发给别家，必然 400。
+    """
+    prov = _provider()
+    base = (prov.get("base_url") or "").lower()
+    model = (prov.get("model") or "").strip()
+    if "api.deepseek.com" in base or not model:
+        return MODEL_CATALOG, None
+    name = prov.get("name") or "当前提供商"
+    item = {
+        "api_model": model,
+        "name": model,
+        "desc": "来自 " + name + "（" + base + "）",
+        "purpose": "chat",
+        "default": True,
+        "verified": True,
+    }
+    item["id"] = model
+    return [item], model
+
 API_MODEL_ALIASES = {m["id"]: m.get("api_model") or m["id"] for m in MODEL_CATALOG}
 
 
@@ -195,8 +225,16 @@ def api_model_for(model):
 
 
 def is_selectable(model):
-    """这个模型名能不能被前端选中？（白名单，防止任意字符串进请求体）"""
-    return bool(model) and model in SELECTABLE_MODELS
+    """这个模型名能不能被前端选中？（白名单，防止任意字符串进请求体）
+
+    白名单有两部分：内置两个 DeepSeek 模型 + 当前提供商自己配的模型。
+    """
+    if not model:
+        return False
+    if model in SELECTABLE_MODELS:
+        return True
+    models, _ = active_catalog()
+    return any(m["id"] == model for m in models)
 
 
 def _resolve_model(model, kind="chat"):
@@ -216,18 +254,24 @@ def model_catalog():
     `configured` 为 True 表示它正好是某个用途的默认模型（PURPOSES 里配了）。
     当前两个模型都配置了，所以都是 True。
     """
+    catalog, dyn_default = active_catalog()
     configured = {model_for(kind) for kind in PURPOSES}
     models = []
-    for m in MODEL_CATALOG:
+    for m in catalog:
         item = dict(m)
         item["configured"] = m["id"] in configured
         # 前端据此决定"深度思考"开关是否可点（两个 DeepSeek 模型都支持切到 pro）
         item["supports_thinking"] = _supports_thinking(m["id"])
         models.append(item)
+    if dyn_default:
+        note = "当前使用「%s」的模型 %s；换提供商后这里会跟着变。" % (
+            (_provider().get("name") or "提供商"), dyn_default)
+    else:
+        note = "默认 deepseek-V4.1-flash；深度思考会切到 deepseek-v4-pro。"
     return {
-        "default": _resolve_model(None, "chat"),
+        "default": dyn_default or _resolve_model(None, "chat"),
         "models": models,
-        "note": "默认 deepseek-V4.1-flash；深度思考会切到 deepseek-v4-pro。",
+        "note": note,
     }
 
 
@@ -238,6 +282,9 @@ def model_for(kind="chat"):
     这里也会回落到该用途的默认模型 —— 需求是"只能选这两个"，
     不能让环境变量绕过白名单。
     """
+    _, dyn_default = active_catalog()
+    if dyn_default:
+        return dyn_default           # 非 DeepSeek 提供商：所有用途都用它配置的那个模型
     meta = PURPOSES.get(kind) or PURPOSES["chat"]
     name = _model_env(meta["env"], meta["default"])
     return name if name in SELECTABLE_MODELS else meta["default"]

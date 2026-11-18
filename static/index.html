@@ -5126,6 +5126,8 @@
             }
             renderProviderList();
             syncApiKeyStateFromProviders();
+            // 提供商变了，底部模型下拉也要跟着变（否则还显示上一家的模型）
+            if (typeof loadModelCatalog === 'function') loadModelCatalog();
         }
 
         async function saveProvider() {
@@ -5164,6 +5166,8 @@
                 providerStatusEl('✅ 已保存，立即生效', true);
                 renderProviderList();
                 syncApiKeyStateFromProviders();
+                // 提供商变了，底部模型下拉也要跟着变（否则还显示上一家的模型）
+                if (typeof loadModelCatalog === 'function') loadModelCatalog();
                 setTimeout(function () { showProviderForm(false); editingProviderId = null; }, 600);
             } catch (e) {
                 providerStatusEl('❌ 网络错误：' + e.message);
@@ -5192,6 +5196,8 @@
                 showProviderForm(false);
                 renderProviderList();
                 syncApiKeyStateFromProviders();
+                // 提供商变了，底部模型下拉也要跟着变（否则还显示上一家的模型）
+                if (typeof loadModelCatalog === 'function') loadModelCatalog();
             } catch (e) {
                 providerStatusEl('❌ 网络错误：' + e.message);
             }
@@ -5211,6 +5217,8 @@
                 }
                 renderProviderList();
                 syncApiKeyStateFromProviders();
+                // 提供商变了，底部模型下拉也要跟着变（否则还显示上一家的模型）
+                if (typeof loadModelCatalog === 'function') loadModelCatalog();
             } catch (e) {
                 providerStatusEl('❌ 网络错误：' + e.message);
             }

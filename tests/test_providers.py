@@ -158,6 +158,34 @@ ok("访客看不到账号的 Key（只退回 .env）",
 ok("访客列表里没有账号的提供商",
    provider_store.list_public()["providers"] == [])
 
+# ── 2b. 模型清单跟着提供商走 ─────────────────────────────────
+# 换了别家（base 不是 api.deepseek.com），底部模型下拉只能是它自己的模型，
+# 否则会把 deepseek-flash 发给阿里云，必然 400。
+provider_store.set_current_user("1")
+_ids = [m["id"] for m in llm.model_catalog()["models"]]
+ok("非 DeepSeek 提供商：模型清单只剩它自己那一个",
+   _ids == ["deepseek-chat"], _ids)
+ok("model_for('chat') 用提供商的模型",
+   llm.model_for("chat") == "deepseek-chat", llm.model_for("chat"))
+ok("model_for('reason') 也用它（不再切 deepseek-v4-pro）",
+   llm.model_for("reason") == "deepseek-chat", llm.model_for("reason"))
+ok("生成器模型通过白名单校验", llm.is_selectable("deepseek-chat") is True)
+ok("api_model_for 对非 DeepSeek 模型原样返回",
+   llm.api_model_for("deepseek-chat") == "deepseek-chat")
+
+# 换回 DeepSeek 官方 → 恢复内置的两个模型
+provider_store.upsert({"id": "deepseek", "name": "DeepSeek",
+                       "base_url": "https://api.deepseek.com",
+                       "api_key": "sk-zzzzzzzzzzzzzzzz", "model": "deepseek-flash"})
+provider_store.set_active("deepseek")
+_ids2 = [m["id"] for m in llm.model_catalog()["models"]]
+ok("DeepSeek 官方提供商仍返回内置两个模型",
+   _ids2 == ["deepseek-V4.1-flash", "deepseek-v4-pro"], _ids2)
+ok("默认模型回到 deepseek 那个",
+   llm.model_catalog()["default"] == "deepseek-V4.1-flash",
+   llm.model_catalog()["default"])
+provider_store.set_current_user(None)
+
 # 老版本（v1：整机一份）自动搬进访客桶，不丢配置。
 # 用**独立的临时文件**做这件事：否则会把上面 user 1 的配置一起覆盖掉。
 import json as _json  # noqa: E402
