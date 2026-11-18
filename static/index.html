@@ -1414,7 +1414,9 @@
         }
 
         /* ── 顶部「填写 API Key」按钮 ──
-           金橙色（金 > 橙），始终可见可点；未配置时再叠一层呼吸光晕提示。
+           两种状态，一眼能分清"还差什么"：
+             * 还没填 → 金橙色 + 呼吸光晕，提示这里要补；
+             * 已填好且服务端确认联通 → 蓝底普通按钮，不再抢注意力。
            文案固定为「填写 API Key」：已配置时点开也能直接换一把，
            当前 Key 的尾号写在 title 里（前端不持有完整 Key）。 */
         #btnApiKey {
@@ -1422,24 +1424,27 @@
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            background: linear-gradient(135deg, #f7c948, #e39a1c);
-            border: 1px solid rgba(255, 255, 255, .55);
-            /* 金底上用深棕字，白字对比度不够（金橙偏亮） */
-            color: #4a3208;
+            /* 已联通：普通按钮的蓝底（与页面主色一致） */
+            background: #4f7df3;
+            border: 1px solid rgba(255, 255, 255, .35);
+            color: #fff;
             font-weight: 600;
             white-space: nowrap;
         }
         #btnApiKey:hover {
-            background: linear-gradient(135deg, #ffd76a, #eaa62f);
+            background: #3a66d0;
         }
         #btnApiKey .api-key-ico { font-size: 13px; line-height: 1; }
         #btnApiKey .api-key-label { font-size: 12px; line-height: 1; }
+        /* 还没填：金橙 + 呼吸。注意 color 也要覆盖，否则金底上是白字看不清 */
         #btnApiKey.needs-key {
-            background: linear-gradient(135deg, #ffcb3d, #e8901a);
+            background: linear-gradient(135deg, #f7c948, #e39a1c);
+            border-color: rgba(255, 255, 255, .55);
+            color: #4a3208;
             animation: api-key-breathe 1.4s ease-in-out infinite alternate;
         }
         #btnApiKey.needs-key:hover {
-            background: linear-gradient(135deg, #ffd75e, #f0a02c);
+            background: linear-gradient(135deg, #ffd76a, #eaa62f);
         }
         /* 呼吸用的动画只写 from/to（不回写百分比关键帧）：
            tests/test_pagination.js 里有一条"不允许悬空关键帧片段"的回归用例，

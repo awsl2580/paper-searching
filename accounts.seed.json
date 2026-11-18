@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "next_id": 1,
+  "users": [],
+  "_note": "账号种子文件（进版本库）。真实账号在 accounts.json 里，那个文件不进版本库。需要预置账号时：把本文件复制成 accounts.json，再往 users 里加条目（password 必须是 bcrypt 哈希，不能是明文）。留空表示从零开始，登录页注册或点「一键生成账号」即可。"
+}

@@ -63,9 +63,17 @@ _edge_*
 _backup_*/
 # 账号探针副本（含 bcrypt 哈希，测试遗留）
 _probe_*.json
-# accounts.json 本身要进库：它是"账号跟着项目走"的落盘文件（password 只是
-# bcrypt 哈希）。只忽略写入时的临时/损坏副本。
-accounts.json.tmp
+# ── 账号数据 ──────────────────────────────────────────────
+# accounts.json 是**活数据文件**（每次注册/改名/登录都会改写），不进版本库。
+# 原因：它一被跟踪，就变成"用一次应用脏一次工作区"，提交代码时极易被误带；
+# 而且里面是真实用户的 bcrypt 哈希，本不该随代码走。
+#
+# 新克隆/换机器时 accounts.json 不存在 —— 这是正常的：core/accounts.py 的
+# load() 会返回空结构，登录页直接注册或点「一键生成账号」即可。
+# 想预置账号，把 accounts.seed.json 复制成 accounts.json 再改。
+accounts.json
+# 写入时的临时/损坏副本（save() 用 accounts.json.<pid>.<tid>.tmp）
+accounts.json.*.tmp
 accounts.json.broken
 
 # 权限诊断报告（排查 Windows 文件权限时生成）

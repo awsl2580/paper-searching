@@ -148,8 +148,9 @@ flowchart LR
 ├── paths.py                 # 把分类目录统一加入 sys.path（保持扁平 import）
 ├── 一键启动.bat             # Windows 双击启动
 ├── requirements.txt / .env.example / .gitignore
-├── accounts.json            # 账号（bcrypt 哈希，勿外传）
-└── literature.db            # SQLite（收藏/会话/工作流/记忆，勿外传）
+├── accounts.seed.json       # 账号种子（进库）：空的 users 骨架，需要预置账号时复制成 accounts.json
+├── accounts.json            # 账号（bcrypt 哈希）——**本地数据，不进版本库**
+└── literature.db            # SQLite（收藏/会话/工作流/记忆）——本地数据，不进版本库
 ```
 
 ---
@@ -566,7 +567,10 @@ python tests/run_all.py
 * **账号只注册一次**：账号信息（昵称 / 密码哈希 / 头像）存在项目目录的
   **`accounts.json`**（明文放不进这个文件，密码只存 bcrypt 哈希），重启服务后
   **直接登录即可**；登录框还会列出「本机已注册的账号」，点一下就填好用户名。
-  收藏 / 对话记录 / 研究记忆仍在 `literature.db`。两个文件都别外传。
+  收藏 / 对话记录 / 研究记忆仍在 `literature.db`。
+  **这两个文件都是本地数据、都不进版本库**（`accounts.json` 每次注册/登录都会改写，
+  跟踪它会让工作区天天变脏）；新克隆时它不存在是正常的，登录页注册或点
+  「一键生成账号」即可。要预置账号就复制 `accounts.seed.json` 再改。
 * **保持登录**：登录框默认勾选「记住我」，cookie 带 30 天有效期（`LOGIN_DAYS` 可调），
   关掉浏览器/重启服务再打开仍是登录态。本机演示想彻底免登录可以设 `DEV_AUTO_LOGIN=<用户名>`
   （只对回环地址生效）。
