@@ -4916,6 +4916,26 @@
         let providerState = { items: [], activeId: null, editable: true, envFallback: false, loggedIn: true };
         let editingProviderId = null;
 
+        /**
+         * 读 JSON 响应。
+         *
+         * 为什么不用 resp.json()：改了后端忘记重启时，新接口不存在，
+         * Flask 会回一整页 HTML，`resp.json()` 抛的是
+         *   Unexpected token '<', "<!doctype "... is not valid JSON
+         * ——对着这句没人知道该去重启服务。
+         */
+        async function readJson(resp) {
+            const text = await resp.text();
+            try {
+                return JSON.parse(text);
+            } catch (e) {
+                if (resp.status === 404) {
+                    throw new Error('服务端没有这个接口（404）：多半还在跑旧进程，重启服务后再试');
+                }
+                throw new Error('服务端返回的不是 JSON（HTTP ' + resp.status + '），可能服务未重启');
+            }
+        }
+
         function providerStatusEl(msg, ok) {
             const el = document.getElementById('providerStatus');
             if (!el) return;
@@ -5095,7 +5115,7 @@
         async function loadProviders() {
             try {
                 const resp = await fetch('/api/providers', { credentials: 'include' });
-                const data = await resp.json();
+                const data = await readJson(resp);
                 providerState.items = data.providers || [];
                 providerState.activeId = data.active_id || null;
                 providerState.editable = data.editable !== false;
@@ -5131,7 +5151,7 @@
                         model: document.getElementById('pvModel').value.trim(),
                     }),
                 });
-                const data = await resp.json();
+                const data = await readJson(resp);
                 if (!data.success) {
                     providerStatusEl('❌ ' + (data.error || '保存失败'));
                     return;
@@ -5161,7 +5181,7 @@
                 const resp = await fetch('/api/providers/' + encodeURIComponent(editingProviderId), {
                     method: 'DELETE', credentials: 'include',
                 });
-                const data = await resp.json();
+                const data = await readJson(resp);
                 if (!data.success) { providerStatusEl('❌ ' + (data.error || '删除失败')); return; }
                 if (data.list) {
                     providerState.items = data.list.providers || [];
@@ -5182,7 +5202,7 @@
                 const resp = await fetch('/api/providers/' + encodeURIComponent(id) + '/activate', {
                     method: 'POST', credentials: 'include',
                 });
-                const data = await resp.json();
+                const data = await readJson(resp);
                 if (!data.success) { providerStatusEl('❌ ' + (data.error || '切换失败')); return; }
                 if (data.list) {
                     providerState.items = data.list.providers || [];
