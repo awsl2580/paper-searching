@@ -4424,13 +4424,34 @@
             <div class="provider-form" id="providerForm" style="display:none;">
                 <label class="pv-field"><span>提供商</span>
                     <select id="pvPreset" onchange="onProviderPresetChange()">
-                        <option value="deepseek">DeepSeek</option>
-                        <option value="openai">OpenAI</option>
-                        <option value="dashscope">阿里云百炼（通义）</option>
-                        <option value="zhipu">智谱 GLM</option>
-                        <option value="moonshot">Moonshot（Kimi）</option>
-                        <option value="ollama">本地 Ollama</option>
-                        <option value="custom">自定义…</option>
+                        <optgroup label="常用">
+                            <option value="deepseek">DeepSeek</option>
+                            <option value="qwen">阿里云百炼（通义）</option>
+                            <option value="zhipu">智谱 GLM（国内）</option>
+                            <option value="moonshot-cn">Moonshot Kimi（中国）</option>
+                            <option value="openai">OpenAI</option>
+                            <option value="openrouter">OpenRouter</option>
+                        </optgroup>
+                        <optgroup label="更多云服务">
+                            <option value="xai">xAI Grok</option>
+                            <option value="groq">Groq</option>
+                            <option value="together">Together AI</option>
+                            <option value="fireworks">Fireworks</option>
+                            <option value="cerebras">Cerebras</option>
+                            <option value="nvidia">NVIDIA NIM</option>
+                            <option value="huggingface">Hugging Face</option>
+                            <option value="baseten">Baseten</option>
+                            <option value="moonshot">Moonshot（国际）</option>
+                            <option value="zai">Z.ai（智谱国际）</option>
+                            <option value="xiaomi">小米 MiMo</option>
+                            <option value="antling">蚂蚁 Ling</option>
+                            <option value="opencode">OpenCode</option>
+                            <option value="kimicoding">Kimi Coding</option>
+                        </optgroup>
+                        <optgroup label="本地 / 其它">
+                            <option value="ollama">本地 Ollama</option>
+                            <option value="custom">自定义…</option>
+                        </optgroup>
                     </select></label>
                 <label class="pv-field"><span>名称</span>
                     <input id="pvName" placeholder="如 DeepSeek" autocomplete="off" /></label>
@@ -4949,14 +4970,34 @@
 
         /* 常见服务的地址/默认模型。选了预设就不用背 URL ——
            这也避免了手抄地址少写 /v1、写成 http 之类的低级错误。 */
+        /* 预设清单对齐 DeepSeek Harness 内置的 provider 目录
+           （pi-ai/dist/providers/data 里支持 OpenAI 兼容协议的那些）。
+           只收"填一个 Key 就能用"的：需要额外部署名/账号 ID 的
+           （Azure、Cloudflare、GitHub Copilot 等）和走 OAuth 的不在列。
+           `base` 末尾是否带版本号因家而异，后端会按需补 /v1（见 provider_store）。 */
         const PROVIDER_PRESETS = {
-            deepseek:  { name: 'DeepSeek',   base: 'https://api.deepseek.com/v1',                        model: 'deepseek-chat' },
-            openai:    { name: 'OpenAI',     base: 'https://api.openai.com/v1',                          model: 'gpt-4o-mini' },
-            dashscope: { name: '阿里云百炼', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
-            zhipu:     { name: '智谱 GLM',   base: 'https://open.bigmodel.cn/api/paas/v4',               model: 'glm-4-flash' },
-            moonshot:  { name: 'Moonshot',   base: 'https://api.moonshot.cn/v1',                         model: 'moonshot-v1-8k' },
-            ollama:    { name: '本地 Ollama', base: 'http://127.0.0.1:11434/v1',                         model: 'qwen2.5' },
-            custom:    { name: '',           base: '',                                                 model: '' }
+            deepseek:    { name: 'DeepSeek',        base: 'https://api.deepseek.com',                                     model: 'deepseek-flash' },
+            qwen:        { name: '阿里云百炼',      base: 'https://dashscope.aliyuncs.com/compatible-mode/v1',            model: 'qwen-plus' },
+            zhipu:       { name: '智谱 GLM',        base: 'https://open.bigmodel.cn/api/coding/paas/v4',                  model: 'glm-4.6v' },
+            'moonshot-cn': { name: 'Moonshot Kimi', base: 'https://api.moonshot.cn/v1',                                   model: 'kimi-k2.6' },
+            openai:      { name: 'OpenAI',          base: 'https://api.openai.com/v1',                                    model: 'gpt-6-luna' },
+            openrouter:  { name: 'OpenRouter',      base: 'https://openrouter.ai/api/v1',                                 model: '~anthropic/claude-sonnet-latest' },
+            xai:         { name: 'xAI Grok',        base: 'https://api.x.ai/v1',                                          model: 'grok-4.3' },
+            groq:        { name: 'Groq',            base: 'https://api.groq.com/openai/v1',                               model: 'llama-3.3-70b-versatile' },
+            together:    { name: 'Together AI',     base: 'https://api.together.ai/v1',                                   model: 'deepseek-ai/DeepSeek-V4.1-Flash' },
+            fireworks:   { name: 'Fireworks',       base: 'https://api.fireworks.ai/inference/v1',                        model: 'accounts/fireworks/models/glm-5p3' },
+            cerebras:    { name: 'Cerebras',        base: 'https://api.cerebras.ai/v1',                                   model: 'gpt-oss-120b' },
+            nvidia:      { name: 'NVIDIA NIM',      base: 'https://integrate.api.nvidia.com/v1',                          model: 'deepseek-ai/deepseek-v4.1-flash' },
+            huggingface: { name: 'Hugging Face',    base: 'https://router.huggingface.co/v1',                             model: 'deepseek-ai/DeepSeek-V3' },
+            baseten:     { name: 'Baseten',         base: 'https://inference.baseten.co/v1',                              model: 'deepseek-ai/DeepSeek-V4.1-Flash' },
+            moonshot:    { name: 'Moonshot',        base: 'https://api.moonshot.ai/v1',                                   model: 'kimi-k2.6' },
+            zai:         { name: 'Z.ai',            base: 'https://api.z.ai/api/coding/paas/v4',                          model: 'glm-4.7' },
+            xiaomi:      { name: '小米 MiMo',       base: 'https://api.xiaomimimo.com/v1',                                model: 'mimo-v2.5' },
+            antling:     { name: '蚂蚁 Ling',       base: 'https://api.ant-ling.com/v1',                                  model: 'Ling-2.6-1T' },
+            opencode:    { name: 'OpenCode',        base: 'https://opencode.ai/inference/v1',                             model: 'big-pickle' },
+            kimicoding:  { name: 'Kimi Coding',     base: 'https://api.kimi.com/coding/v1',                               model: 'k3' },
+            ollama:      { name: '本地 Ollama',     base: 'http://127.0.0.1:11434/v1',                                    model: 'qwen2.5' },
+            custom:      { name: '',                base: '',                                                             model: '' }
         };
 
         /**

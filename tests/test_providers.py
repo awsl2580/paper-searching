@@ -57,6 +57,15 @@ r0 = provider_store.resolve()
 ok("没有文件时回退到 .env 的 Key", r0["api_key"] == "sk-env-fallback-123456", r0["api_key"])
 ok("回退时标记 source=env", r0["source"] == "env", r0["source"])
 
+ok("地址没有版本号时补 /v1",
+   provider_store._normalize_base("https://api.deepseek.com") == "https://api.deepseek.com/v1")
+ok("已经带 /v4 的地址不再补 /v1（否则必然 404）",
+   provider_store._normalize_base("https://api.z.ai/api/coding/paas/v4")
+   == "https://api.z.ai/api/coding/paas/v4",
+   provider_store._normalize_base("https://api.z.ai/api/coding/paas/v4"))
+ok("已经带 /v1 的地址保持不变",
+   provider_store._normalize_base("https://api.moonshot.cn/v1/") == "https://api.moonshot.cn/v1")
+
 p1 = provider_store.upsert({"name": "DeepSeek", "base_url": "api.deepseek.com",
                             "api_key": "sk-abcdefghijklmnop", "model": "deepseek-chat"})
 ok("新增后 id 由名称生成", p1["id"] == "deepseek", p1["id"])
@@ -254,6 +263,16 @@ ok("Base URL 输入默认隐藏（选自定义才出现）",
    'id="pvBaseWrap"' in html_src and "pvBaseWrap\" style=\"display:none;\"" in html_src)
 ok("选预设会自动带出名称/地址/模型",
    "PROVIDER_PRESETS" in html_src and "onProviderPresetChange" in html_src)
+import re as _re  # noqa: E402
+_catalog = _re.search(r"const PROVIDER_PRESETS = \{(.*?)\n        \};", html_src, _re.S)
+_preset_count = len(_re.findall(r"^\s+'?[\w-]+'?:\s*\{ name:", (_catalog.group(1) if _catalog else ""), _re.M))
+ok("预设已与 DSH 内置目录同步（≥20 家）", _preset_count >= 20, _preset_count)
+ok("覆盖主流 OpenAI 兼容服务",
+   all(k in html_src for k in ("openrouter", "groq", "nvidia", "together",
+                               "fireworks", "cerebras", "huggingface", "baseten",
+                               "xai", "zai", "xiaomi")))
+ok("下拉按「常用 / 更多 / 本地」分组", html_src.count("<optgroup") >= 3,
+   html_src.count("<optgroup"))
 ok("编辑已有提供商时不会被预设覆盖（传 fill=false）",
    "onProviderPresetChange(false)" in html_src)
 

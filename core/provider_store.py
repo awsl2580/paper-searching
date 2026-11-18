@@ -186,14 +186,20 @@ def _slug(name: str, existing: set[str]) -> str:
 
 
 def _normalize_base(raw: str) -> str:
+    """把地址收敛成可直接拼 `/chat/completions` 的形式。
+
+    只在**末尾没有版本号**时补 `/v1`：各家并不都用 v1 ——
+    例如 Z.ai 是 `.../coding/paas/v4`、智谱国内是 `.../api/coding/paas/v4`，
+    无脑补 `/v1` 会变成 `.../v4/v1`，请求必然 404（这次同步预设时踩到过）。
+    """
     base = (raw or "").strip().rstrip("/")
     if not base:
         return DEFAULT_BASE_URL
     if not re.match(r"^https?://", base, re.I):
         base = "https://" + base
-    if not base.endswith("/v1"):
-        base = base + "/v1"
-    return base
+    if re.search(r"/v\d+$", base, re.I):      # 已经以 /v1、/v4 这类结尾
+        return base
+    return base + "/v1"
 
 
 # ── 读 ──────────────────────────────────────────────────────
