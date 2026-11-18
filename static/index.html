@@ -1414,23 +1414,44 @@
         }
 
         /* ── 顶部「填写 API Key」按钮 ──
-           没配置时是暖色 + 轻微呼吸动画（不弹窗、不报错，用按钮本身提示）；
-           配置好之后回到和旁边按钮一样的低调样式，点击仍可更换。 */
+           金橙色（金 > 橙），始终可见可点；未配置时再叠一层呼吸光晕提示。
+           文案固定为「填写 API Key」：已配置时点开也能直接换一把，
+           当前 Key 的尾号写在 title 里（前端不持有完整 Key）。 */
+        #btnApiKey {
+            padding: 4px 11px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: linear-gradient(135deg, #f7c948, #e39a1c);
+            border: 1px solid rgba(255, 255, 255, .55);
+            /* 金底上用深棕字，白字对比度不够（金橙偏亮） */
+            color: #4a3208;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        #btnApiKey:hover {
+            background: linear-gradient(135deg, #ffd76a, #eaa62f);
+        }
+        #btnApiKey .api-key-ico { font-size: 13px; line-height: 1; }
+        #btnApiKey .api-key-label { font-size: 12px; line-height: 1; }
         #btnApiKey.needs-key {
-            background: linear-gradient(135deg, #ff9a4d, #ef6c2b);
-            border-color: rgba(255, 255, 255, 0.55);
-            color: #fff;
+            background: linear-gradient(135deg, #ffcb3d, #e8901a);
             animation: api-key-breathe 1.4s ease-in-out infinite alternate;
         }
         #btnApiKey.needs-key:hover {
-            background: linear-gradient(135deg, #ffa963, #f47a3a);
+            background: linear-gradient(135deg, #ffd75e, #f0a02c);
         }
         /* 呼吸用的动画只写 from/to（不回写百分比关键帧）：
            tests/test_pagination.js 里有一条"不允许悬空关键帧片段"的回归用例，
            写成 `} 55% {` 会被它判成历史 bug 复现。 */
         @keyframes api-key-breathe {
-            from { box-shadow: 0 0 0 0 rgba(255, 154, 77, 0.6); }
-            to   { box-shadow: 0 0 0 7px rgba(255, 154, 77, 0); }
+            from { box-shadow: 0 0 0 0 rgba(245, 188, 60, 0.65); }
+            to   { box-shadow: 0 0 0 7px rgba(245, 188, 60, 0); }
+        }
+        /* 窄屏先收文字、只留钥匙图标：顶栏不允许换行 */
+        @media (max-width: 1180px) {
+            #btnApiKey .api-key-label { display: none; }
+            #btnApiKey { padding: 4px 9px; }
         }
 
         /* ── 填写 API Key 弹窗里的输入框 ── */
@@ -2554,8 +2575,8 @@
             flex-wrap: nowrap;
             flex-shrink: 0;
         }
-        /* 只放图标，避免为了一个 Key 按钮把顶栏挤到第二行 */
-        #btnApiKey { padding: 4px 9px; }
+        /* Key 按钮的内边距/配色统一在上面 #btnApiKey 那段定义（含窄屏收起文字），
+           这里不再重复 —— 两条同优先级规则容易互相覆盖，改一处忘另一处。 */
         /* 登出按钮不允许被压成两行/缩没 */
         #btnLogout { flex: 0 0 auto; white-space: nowrap; }
         .feature-btn {
@@ -3961,10 +3982,14 @@
             <div class="header-actions" id="headerActions">
                 <!-- 没填 Key 时这里是唯一"提示"，点开就能填；不弹报错、不挡使用。
                      只显示图标，避免顶栏被挤成两行（完整说明放在 title 里）。 -->
-                <button class="btn btn-clear btn-sm" id="btnApiKey"
+                <!-- 填 Key 的入口：金橙色 + 明确文案，不再只是一个钥匙图标。
+                     窄屏会自动收成图标（见 #btnApiKey 的媒体查询）。 -->
+                <button class="btn btn-sm" id="btnApiKey"
                         onclick="openApiKeyModal()"
                         title="填写 / 更换 DeepSeek API Key"
-                        aria-label="填写或更换 DeepSeek API Key">🔑</button>
+                        aria-label="填写或更换 DeepSeek API Key"
+                    ><span class="api-key-ico" aria-hidden="true">🔑</span
+                    ><span class="api-key-label">填写 API Key</span></button>
                 <!-- 五个功能收进一个「功能」下拉（收藏 / 文献表 / 名词解释 /
                      润色 / 科研工作流）。FEATURES 仍是唯一数据源：菜单项由
                      renderHeaderFeatures() 按它渲染，点开走同一套
@@ -4748,19 +4773,21 @@
         let apiKeySet = false;
         let apiKeyHint = '';
 
-        /** 按当前状态刷新顶部按钮：没配置 → 暖色呼吸提示；已配置 → 普通样式 */
+        /** 按当前状态刷新顶部按钮：没配置 → 呼吸提示；已配置 → 只去掉动画 */
         function applyApiKeyState() {
             const btn = document.getElementById('btnApiKey');
             if (!btn) return;
+            // 注意用 innerHTML 重建而不是 textContent：后者会把标记里的
+            // 「填写 API Key」文案一起抹掉，只剩一个钥匙图标（改文案时踩过）。
+            btn.innerHTML = '<span class="api-key-ico" aria-hidden="true">🔑</span>' +
+                '<span class="api-key-label">填写 API Key</span>';
             if (apiKeySet) {
                 btn.classList.remove('needs-key');
-                btn.textContent = '🔑';
                 btn.title = apiKeyHint
                     ? '当前 Key：' + apiKeyHint + '（点击可更换）'
                     : '点击可更换 API Key';
             } else {
                 btn.classList.add('needs-key');
-                btn.textContent = '🔑';
                 btn.title = '还没有配置 DeepSeek API Key，点这里填写';
             }
         }
